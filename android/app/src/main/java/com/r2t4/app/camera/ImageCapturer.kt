@@ -78,17 +78,21 @@ class ImageCapturer(private val context: Context) {
      * Check if camera permission is granted.
      */
     fun hasPermission(): Boolean {
-        return ContextCompat.checkSelfPermission(
+        val granted = ContextCompat.checkSelfPermission(
             context,
             Manifest.permission.CAMERA
         ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) Log.w(TAG, "Camera permission CHECK failed")
+        return granted
     }
 
     /**
      * Check if camera hardware is available.
      */
     fun hasCameraHardware(): Boolean {
-        return context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+        val hasFeature = context.packageManager.hasSystemFeature(PackageManager.FEATURE_CAMERA_ANY)
+        if (!hasFeature) Log.w(TAG, "No camera hardware feature detected")
+        return hasFeature
     }
 
     /**
@@ -96,50 +100,57 @@ class ImageCapturer(private val context: Context) {
      * Uses the back camera.
      */
     suspend fun initialize(lifecycleOwner: LifecycleOwner): Boolean {
+        Log.d(TAG, "Initializing camera...")
+        
         if (!hasPermission()) {
-            Log.w(TAG, "Camera permission not granted")
+            Log.e(TAG, "Camera permission not granted")
             return false
         }
 
         if (!hasCameraHardware()) {
-            Log.w(TAG, "No camera hardware available")
+            Log.e(TAG, "No camera hardware available")
             return false
         }
 
         return suspendCoroutine { continuation ->
-            val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
-            cameraProviderFuture.addListener({
-                try {
-                    cameraProvider = cameraProviderFuture.get()
+            try {
+                val cameraProviderFuture = ProcessCameraProvider.getInstance(context)
+                cameraProviderFuture.addListener({
+                    try {
+                        cameraProvider = cameraProviderFuture.get()
 
-                    // Set up image capture use case
-                    imageCapture = ImageCapture.Builder()
-                        .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
-                        .setTargetResolution(android.util.Size(imageWidth, imageHeight))
-                        .setFlashMode(ImageCapture.FLASH_MODE_OFF)
-                        .build()
+                        // Set up image capture use case
+                        imageCapture = ImageCapture.Builder()
+                            .setCaptureMode(ImageCapture.CAPTURE_MODE_MINIMIZE_LATENCY)
+                            .setTargetResolution(android.util.Size(imageWidth, imageHeight))
+                            .setFlashMode(ImageCapture.FLASH_MODE_OFF)
+                            .build()
 
-                    // Select back camera
-                    val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
+                        // Select back camera
+                        val cameraSelector = CameraSelector.DEFAULT_BACK_CAMERA
 
-                    // Unbind any existing use cases
-                    cameraProvider?.unbindAll()
+                        // Unbind any existing use cases
+                        cameraProvider?.unbindAll()
 
-                    // Bind use cases to camera
-                    camera = cameraProvider?.bindToLifecycle(
-                        lifecycleOwner,
-                        cameraSelector,
-                        imageCapture
-                    )
+                        // Bind use cases to camera
+                        camera = cameraProvider?.bindToLifecycle(
+                            lifecycleOwner,
+                            cameraSelector,
+                            imageCapture
+                        )
 
-                    Log.i(TAG, "Camera initialized successfully")
-                    continuation.resume(true)
+                        Log.i(TAG, "Camera initialized successfully")
+                        continuation.resume(true)
 
-                } catch (e: Exception) {
-                    Log.e(TAG, "Failed to initialize camera: ${e.message}")
-                    continuation.resume(false)
-                }
-            }, ContextCompat.getMainExecutor(context))
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to initialize camera: ${e.message}", e)
+                        continuation.resume(false)
+                    }
+                }, ContextCompat.getMainExecutor(context))
+            } catch (e: Exception) {
+                 Log.e(TAG, "Failed to get camera provider: ${e.message}", e)
+                 continuation.resume(false)
+            }
         }
     }
 
@@ -153,7 +164,7 @@ class ImageCapturer(private val context: Context) {
         }
 
         if (imageCapture == null) {
-            Log.e(TAG, "Camera not initialized")
+            Log.e(TAG, "Camera not initialized - cannot start capture")
             return
         }
 
@@ -209,6 +220,8 @@ class ImageCapturer(private val context: Context) {
                                 )
                                 _imageFrames.tryEmit(frame)
                                 Log.d(TAG, "Image captured: seq=${frame.sequenceNumber}, size=${jpegData.size}")
+                            } else {
+                                Log.e(TAG, "Failed to convert image to JPEG")
                             }
                         } catch (e: Exception) {
                             Log.e(TAG, "Error processing captured image: ${e.message}")
@@ -219,7 +232,7 @@ class ImageCapturer(private val context: Context) {
                     }
 
                     override fun onError(exception: ImageCaptureException) {
-                        Log.e(TAG, "Image capture failed: ${exception.message}")
+                        Log.e(TAG, "Image capture failed: ${exception.message}", exception)
                         continuation.resume(Unit)
                     }
                 }
@@ -240,7 +253,10 @@ class ImageCapturer(private val context: Context) {
             val options = BitmapFactory.Options().apply {
                 inSampleSize = calculateInSampleSize(image.width, image.height, imageWidth, imageHeight)
             }
-            var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
+            var bitmap = BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options) ?: run {
+                Log.e(TAG, "Failed to decode bitmap from bytes")
+                 return null
+            }
 
             // Rotate if needed based on image rotation
             val rotation = image.imageInfo.rotationDegrees
