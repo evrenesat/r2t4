@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>R2T4 Admin</title>
+    <style>
+        :root {
+            --bg-primary: #0f172a;
+            --bg-secondary: #1e293b;
+            --bg-tertiary: #334155;
+            --text-primary: #f1f5f9;
+            --text-secondary: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #22c55e;
+            --warning: #f59e0b;
+            --danger: #ef4444;
+            --border: #475569;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            min-height: 100vh;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 24px;
+        }
+
+        header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 32px;
+            padding-bottom: 24px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        h1 {
+            font-size: 1.75rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, var(--accent), #8b5cf6);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+        }
+
+        .status-badge {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 16px;
+            background: var(--bg-secondary);
+            border-radius: 9999px;
+            font-size: 0.875rem;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 16px;
+            margin-bottom: 32px;
+        }
+
+        .stat-card {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 20px;
+            border: 1px solid var(--border);
+        }
+
+        .stat-value {
+            font-size: 2rem;
+            font-weight: 700;
+            color: var(--accent);
+        }
+
+        .stat-label {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+            margin-top: 4px;
+        }
+
+        .section {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 24px;
+            margin-bottom: 24px;
+            border: 1px solid var(--border);
+        }
+
+        .section-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        h2 {
+            font-size: 1.25rem;
+            font-weight: 600;
+        }
+
+        .btn {
+            padding: 8px 16px;
+            border-radius: 8px;
+            font-size: 0.875rem;
+            font-weight: 500;
+            cursor: pointer;
+            border: none;
+            transition: all 0.2s;
+        }
+
+        .btn-primary {
+            background: var(--accent);
+            color: white;
+        }
+
+        .btn-primary:hover {
+            background: var(--accent-hover);
+        }
+
+        .btn-danger {
+            background: var(--danger);
+            color: white;
+        }
+
+        .btn-danger:hover {
+            background: #dc2626;
+        }
+
+        .btn-secondary {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .btn-secondary:hover {
+            background: var(--border);
+        }
+
+        .device-list {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .device-card {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 16px;
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .device-card:hover {
+            background: var(--border);
+        }
+
+        .device-card.selected {
+            border: 2px solid var(--accent);
+        }
+
+        .device-info h3 {
+            font-size: 1rem;
+            font-weight: 600;
+        }
+
+        .device-info p {
+            color: var(--text-secondary);
+            font-size: 0.875rem;
+        }
+
+        .device-stats {
+            display: flex;
+            gap: 16px;
+            font-size: 0.875rem;
+            color: var(--text-secondary);
+        }
+
+        .file-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+            gap: 16px;
+        }
+
+        .file-card {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .file-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.3);
+        }
+
+        .file-preview {
+            aspect-ratio: 16/9;
+            background: var(--bg-primary);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            color: var(--text-secondary);
+        }
+
+        .file-preview img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .file-preview audio {
+            width: 100%;
+            padding: 16px;
+        }
+
+        .file-info {
+            padding: 12px;
+        }
+
+        .file-info h4 {
+            font-size: 0.875rem;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .file-info p {
+            font-size: 0.75rem;
+            color: var(--text-secondary);
+        }
+
+        .tabs {
+            display: flex;
+            gap: 4px;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 8px 16px;
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            border-radius: 6px;
+            font-size: 0.875rem;
+            transition: all 0.2s;
+        }
+
+        .tab:hover {
+            background: var(--bg-tertiary);
+            color: var(--text-primary);
+        }
+
+        .tab.active {
+            background: var(--accent);
+            color: white;
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 48px;
+            color: var(--text-secondary);
+        }
+
+        .empty-state svg {
+            width: 64px;
+            height: 64px;
+            margin-bottom: 16px;
+            opacity: 0.5;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            padding: 48px;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid var(--bg-tertiary);
+            border-top-color: var(--accent);
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .modal {
+            display: none;
+            position: fixed;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.8);
+            z-index: 1000;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .modal.active {
+            display: flex;
+        }
+
+        .modal-content {
+            background: var(--bg-secondary);
+            border-radius: 12px;
+            padding: 24px;
+            max-width: 90vw;
+            max-height: 90vh;
+            overflow: auto;
+        }
+
+        .modal-content img {
+            max-width: 100%;
+            border-radius: 8px;
+        }
+
+        .modal-content audio {
+            width: 100%;
+            margin-top: 16px;
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 16px;
+            right: 16px;
+            background: var(--bg-tertiary);
+            border: none;
+            color: var(--text-primary);
+            width: 40px;
+            height: 40px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 1.25rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>📺 R2T4 Admin</h1>
+            <div class="status-badge">
+                <div class="status-dot"></div>
+                <span id="server-status">Loading...</span>
+            </div>
+        </header>
+
+        <div class="stats-grid" id="stats-grid">
+            <div class="stat-card">
+                <div class="stat-value" id="stat-devices">-</div>
+                <div class="stat-label">Devices</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-audio">-</div>
+                <div class="stat-label">Audio Chunks</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-images">-</div>
+                <div class="stat-label">Images</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-prompts">-</div>
+                <div class="stat-label">Prompts</div>
+            </div>
+            <div class="stat-card">
+                <div class="stat-value" id="stat-storage">-</div>
+                <div class="stat-label">Storage Used</div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>📱 Devices</h2>
+                <button class="btn btn-secondary" onclick="refreshDevices()">Refresh</button>
+            </div>
+            <div class="device-list" id="device-list">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+        </div>
+
+        <div class="section" id="files-section" style="display: none;">
+            <div class="section-header">
+                <h2>📁 Files for <span id="selected-device"></span></h2>
+                <div style="display: flex; gap: 8px;">
+                    <button class="btn btn-danger" onclick="clearDevice()">Clear All</button>
+                    <button class="btn btn-secondary" onclick="refreshFiles()">Refresh</button>
+                </div>
+            </div>
+            <div class="tabs">
+                <button class="tab active" data-type="all" onclick="filterFiles('all', this)">All</button>
+                <button class="tab" data-type="audio" onclick="filterFiles('audio', this)">Audio</button>
+                <button class="tab" data-type="image" onclick="filterFiles('image', this)">Images</button>
+            </div>
+            <div class="file-grid" id="file-grid">
+                <div class="loading"><div class="spinner"></div></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal" id="file-modal">
+        <button class="modal-close" onclick="closeModal()">×</button>
+        <div class="modal-content" id="modal-content"></div>
+    </div>
+
+    <script>
+        let currentDevice = null;
+        let currentFileType = 'all';
+
+        async function fetchAPI(path) {
+            const resp = await fetch(path);
+            return resp.json();
+        }
+
+        function formatBytes(bytes) {
+            if (bytes === 0) return '0 B';
+            const k = 1024;
+            const sizes = ['B', 'KB', 'MB', 'GB'];
+            const i = Math.floor(Math.log(bytes) / Math.log(k));
+            return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+        }
+
+        function formatTime(ms) {
+            if (!ms) return 'Never';
+            return new Date(ms).toLocaleString();
+        }
+
+        async function loadStats() {
+            try {
+                const data = await fetchAPI('/api/stats');
+                document.getElementById('stat-devices').textContent = data.deviceCount || 0;
+                document.getElementById('stat-audio').textContent = data.totalAudioChunks || 0;
+                document.getElementById('stat-images').textContent = data.totalImageFrames || 0;
+                document.getElementById('stat-prompts').textContent = data.totalPrompts || 0;
+                document.getElementById('stat-storage').textContent = formatBytes(parseInt(data.totalStorageBytes) || 0);
+            } catch (e) {
+                console.error('Failed to load stats:', e);
+            }
+        }
+
+        async function loadHealth() {
+            try {
+                const data = await fetchAPI('/api/health');
+                document.getElementById('server-status').textContent = 
+                    `${data.status} | v${data.version} | Up ${Math.floor(data.uptimeSeconds / 60)}m`;
+            } catch (e) {
+                document.getElementById('server-status').textContent = 'Disconnected';
+            }
+        }
+
+        async function refreshDevices() {
+            const list = document.getElementById('device-list');
+            list.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+            
+            try {
+                const data = await fetchAPI('/api/devices');
+                if (!data.devices || data.devices.length === 0) {
+                    list.innerHTML = `
+                        <div class="empty-state">
+                            <p>No devices registered yet</p>
+                        </div>
+                    `;
+                    return;
+                }
+
+                list.innerHTML = data.devices.map(d => `
+                    <div class="device-card ${currentDevice === d.deviceId ? 'selected' : ''}" 
+                         onclick="selectDevice('${d.deviceId}')">
+                        <div class="device-info">
+                            <h3>${d.deviceId}</h3>
+                            <p>Last seen: ${formatTime(parseInt(d.lastSeenMs))}</p>
+                        </div>
+                        <div class="device-stats">
+                            <span>🎤 ${d.audioChunkCount || 0}</span>
+                            <span>📷 ${d.imageFrameCount || 0}</span>
+                            <span>💬 ${d.promptCount || 0}</span>
+                            <span>💾 ${formatBytes(parseInt(d.storageBytes) || 0)}</span>
+                        </div>
+                    </div>
+                `).join('');
+            } catch (e) {
+                list.innerHTML = '<div class="empty-state"><p>Failed to load devices</p></div>';
+            }
+        }
+
+        function selectDevice(deviceId) {
+            currentDevice = deviceId;
+            document.getElementById('selected-device').textContent = deviceId;
+            document.getElementById('files-section').style.display = 'block';
+            refreshDevices();
+            refreshFiles();
+        }
+
+        async function refreshFiles() {
+            if (!currentDevice) return;
+
+            const grid = document.getElementById('file-grid');
+            grid.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
+
+            try {
+                let type = '';
+                if (currentFileType === 'audio') type = '&fileType=1';
+                if (currentFileType === 'image') type = '&fileType=2';
+
+                const data = await fetchAPI(`/api/files?deviceId=${currentDevice}${type}&limit=100`);
+                
+                if (!data.files || data.files.length === 0) {
+                    grid.innerHTML = '<div class="empty-state"><p>No files found</p></div>';
+                    return;
+                }
+
+                grid.innerHTML = data.files.map(f => {
+                    const isImage = f.fileType === 2;
+                    const isAudio = f.fileType === 1;
+                    const url = `/api/file/${currentDevice}/${f.fileId}`;
+                    
+                    return `
+                        <div class="file-card" onclick="openFile('${url}', ${isImage}, ${isAudio})">
+                            <div class="file-preview">
+                                ${isImage ? `<img src="${url}" loading="lazy" alt="">` : ''}
+                                ${isAudio ? '🎤' : ''}
+                            </div>
+                            <div class="file-info">
+                                <h4>${f.fileId.split('/').pop()}</h4>
+                                <p>${formatTime(parseInt(f.timestampMs))} • ${formatBytes(parseInt(f.sizeBytes))}</p>
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                grid.innerHTML = '<div class="empty-state"><p>Failed to load files</p></div>';
+            }
+        }
+
+        function filterFiles(type, btn) {
+            currentFileType = type;
+            document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+            btn.classList.add('active');
+            refreshFiles();
+        }
+
+        function openFile(url, isImage, isAudio) {
+            const modal = document.getElementById('file-modal');
+            const content = document.getElementById('modal-content');
+            
+            if (isImage) {
+                content.innerHTML = `<img src="${url}" alt="">`;
+            } else if (isAudio) {
+                content.innerHTML = `<audio controls src="${url}"></audio>`;
+            } else {
+                content.innerHTML = `<a href="${url}" download>Download</a>`;
+            }
+            
+            modal.classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('file-modal').classList.remove('active');
+        }
+
+        async function clearDevice() {
+            if (!currentDevice) return;
+            if (!confirm(`Delete ALL data for device "${currentDevice}"?`)) return;
+
+            try {
+                await fetch(`/api/clear/${currentDevice}`, { method: 'POST' });
+                refreshDevices();
+                refreshFiles();
+                loadStats();
+            } catch (e) {
+                alert('Failed to clear device');
+            }
+        }
+
+        // Close modal on escape
+        document.addEventListener('keydown', e => {
+            if (e.key === 'Escape') closeModal();
+        });
+
+        // Initial load
+        loadHealth();
+        loadStats();
+        refreshDevices();
+
+        // Refresh periodically
+        setInterval(loadHealth, 30000);
+        setInterval(loadStats, 60000);
+    </script>
+</body>
+</html>

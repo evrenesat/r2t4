@@ -1,0 +1,47 @@
+// R2T4 Common Types
+// Shared message definitions used across all services.
+
+syntax = "proto3";
+
+package r2t4.v1;
+
+option go_package = "github.com/evren/r2t4/server/gen/r2t4/v1;r2t4v1";
+
+// DeviceInfo identifies the client device sending data.
+message DeviceInfo {
+  // User-defined device identifier, e.g., "living-room-tv"
+  string device_id = 1;
+  
+  // Client application version for debugging
+  string app_version = 2;
+  
+  // Client wall-clock timestamp in milliseconds since Unix epoch.
+  // Trusted as NTP is assumed on LAN.
+  int64 client_timestamp_ms = 3;
+}
+
+// ChunkMetadata provides timestamping and ordering for uploaded chunks.
+message ChunkMetadata {
+  // Client-generated UUID for this chunk
+  string chunk_id = 1;
+  
+  // Start timestamp of chunk content in milliseconds since Unix epoch
+  int64 start_timestamp_ms = 2;
+  
+  // End timestamp of chunk content in milliseconds since Unix epoch
+  int64 end_timestamp_ms = 3;
+  
+  // Monotonically increasing sequence number for ordering
+  // Reset to 0 on app restart
+  int32 sequence_number = 4;
+}
+
+// SessionInfo for future multi-room/session support.
+// Not used in MVP1 but included for forward compatibility.
+message SessionInfo {
+  // Server-assigned session identifier
+  string session_id = 1;
+  
+  // Room/location identifier for multi-TV support
+  string room_id = 2;
+}

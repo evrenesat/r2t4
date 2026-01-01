@@ -1,0 +1,112 @@
+// R2T4 Upload Service
+// Handles continuous upload of ambient audio chunks and camera images.
+
+syntax = "proto3";
+
+package r2t4.v1;
+
+import "r2t4/v1/common.proto";
+
+option go_package = "github.com/evren/r2t4/server/gen/r2t4/v1;r2t4v1";
+
+// UploadService handles ambient audio and image uploads from the client.
+// These run continuously in the background during normal operation.
+service UploadService {
+  // Upload an ambient audio chunk (typically 5 seconds of WAV data).
+  // Called continuously by the client at the configured chunk interval.
+  rpc UploadAudioChunk(UploadAudioChunkRequest) returns (UploadAudioChunkResponse);
+  
+  // Upload a single camera image frame (JPEG).
+  // Called continuously by the client at the configured photo interval.
+  rpc UploadImageFrame(UploadImageFrameRequest) returns (UploadImageFrameResponse);
+}
+
+// Audio format enumeration for future compression support.
+enum AudioFormat {
+  AUDIO_FORMAT_UNSPECIFIED = 0;
+  // Raw WAV format, 16kHz mono - used in MVP1
+  AUDIO_FORMAT_WAV = 1;
+  // Opus compressed - for MVP2 remote server
+  AUDIO_FORMAT_OPUS = 2;
+  // AAC compressed - alternative for MVP2
+  AUDIO_FORMAT_AAC = 3;
+}
+
+message UploadAudioChunkRequest {
+  // Device identification
+  DeviceInfo device = 1;
+  
+  // Chunk timing and ordering metadata
+  ChunkMetadata metadata = 2;
+  
+  // Raw audio data bytes
+  bytes audio_data = 3;
+  
+  // Audio format (WAV for MVP1)
+  AudioFormat format = 4;
+  
+  // Sample rate in Hz (16000 for MVP1)
+  int32 sample_rate = 5;
+  
+  // Number of channels (1 for mono, MVP1)
+  int32 channels = 6;
+}
+
+message UploadAudioChunkResponse {
+  // Server-assigned acknowledgment ID for debugging/correlation
+  string ack_id = 1;
+  
+  // Whether the upload was successful
+  bool success = 2;
+  
+  // Error message if success is false
+  string error_message = 3;
+  
+  // Server timestamp when chunk was received (for latency measurement)
+  int64 server_timestamp_ms = 4;
+}
+
+// Image format enumeration
+enum ImageFormat {
+  IMAGE_FORMAT_UNSPECIFIED = 0;
+  IMAGE_FORMAT_JPEG = 1;
+  IMAGE_FORMAT_PNG = 2;
+  IMAGE_FORMAT_WEBP = 3;
+}
+
+message UploadImageFrameRequest {
+  // Device identification
+  DeviceInfo device = 1;
+  
+  // Frame timing metadata
+  ChunkMetadata metadata = 2;
+  
+  // Raw image data bytes (JPEG compressed)
+  bytes image_data = 3;
+  
+  // Image format
+  ImageFormat format = 4;
+  
+  // Image width in pixels
+  int32 width = 5;
+  
+  // Image height in pixels
+  int32 height = 6;
+  
+  // JPEG quality (0-100) if applicable
+  int32 quality = 7;
+}
+
+message UploadImageFrameResponse {
+  // Server-assigned acknowledgment ID for debugging/correlation
+  string ack_id = 1;
+  
+  // Whether the upload was successful
+  bool success = 2;
+  
+  // Error message if success is false
+  string error_message = 3;
+  
+  // Server timestamp when frame was received
+  int64 server_timestamp_ms = 4;
+}

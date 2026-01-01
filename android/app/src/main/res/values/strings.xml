@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">R2T4</string>
+    <string name="notification_channel_name">R2T4 Capture</string>
+    <string name="notification_channel_description">Shows when R2T4 is capturing audio and video</string>
+</resources>

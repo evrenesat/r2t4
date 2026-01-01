@@ -1,0 +1,210 @@
+// R2T4 Admin Service
+// Provides administrative access to view and manage stored data.
+// Used by the embedded web UI for debugging and monitoring.
+
+syntax = "proto3";
+
+package r2t4.v1;
+
+option go_package = "github.com/evren/r2t4/server/gen/r2t4/v1;r2t4v1";
+
+// AdminService provides administrative access to the server.
+// No authentication in MVP1 (LAN only).
+service AdminService {
+  // Get server health and version info
+  rpc GetHealth(GetHealthRequest) returns (GetHealthResponse);
+  
+  // List all known devices
+  rpc ListDevices(ListDevicesRequest) returns (ListDevicesResponse);
+  
+  // List files for a specific device
+  rpc ListFiles(ListFilesRequest) returns (ListFilesResponse);
+  
+  // Get a single file's content (for download/preview)
+  rpc GetFile(GetFileRequest) returns (GetFileResponse);
+  
+  // Delete files by ID
+  rpc DeleteFiles(DeleteFilesRequest) returns (DeleteFilesResponse);
+  
+  // Clear all data for a device
+  rpc ClearDevice(ClearDeviceRequest) returns (ClearDeviceResponse);
+  
+  // Get storage statistics
+  rpc GetStats(GetStatsRequest) returns (GetStatsResponse);
+}
+
+message GetHealthRequest {}
+
+message GetHealthResponse {
+  // Server status ("ok", "degraded", etc.)
+  string status = 1;
+  
+  // Server version string
+  string version = 2;
+  
+  // Server uptime in seconds
+  int64 uptime_seconds = 3;
+  
+  // Current time on server (for time sync debugging)
+  int64 server_timestamp_ms = 4;
+}
+
+message ListDevicesRequest {}
+
+message ListDevicesResponse {
+  repeated DeviceSummary devices = 1;
+}
+
+message DeviceSummary {
+  // Device identifier
+  string device_id = 1;
+  
+  // When device first uploaded data
+  int64 first_seen_ms = 2;
+  
+  // When device last uploaded data
+  int64 last_seen_ms = 3;
+  
+  // Total number of audio chunks stored
+  int64 audio_chunk_count = 4;
+  
+  // Total number of image frames stored
+  int64 image_frame_count = 5;
+  
+  // Total number of prompts stored
+  int64 prompt_count = 6;
+  
+  // Total storage used in bytes
+  int64 storage_bytes = 7;
+}
+
+message ListFilesRequest {
+  // Device to list files for
+  string device_id = 1;
+  
+  // Filter by file type
+  FileType file_type = 2;
+  
+  // Start of time range (inclusive)
+  int64 start_timestamp_ms = 3;
+  
+  // End of time range (inclusive)
+  int64 end_timestamp_ms = 4;
+  
+  // Maximum number of files to return
+  int32 limit = 5;
+  
+  // Offset for pagination
+  int32 offset = 6;
+}
+
+enum FileType {
+  FILE_TYPE_UNSPECIFIED = 0;
+  FILE_TYPE_AUDIO = 1;
+  FILE_TYPE_IMAGE = 2;
+  FILE_TYPE_PROMPT = 3;
+  FILE_TYPE_ALL = 4;
+}
+
+message ListFilesResponse {
+  repeated FileSummary files = 1;
+  
+  // Total count (for pagination)
+  int64 total_count = 2;
+}
+
+message FileSummary {
+  // Unique file identifier (path-based)
+  string file_id = 1;
+  
+  // File type
+  FileType file_type = 2;
+  
+  // Timestamp of the content
+  int64 timestamp_ms = 3;
+  
+  // File size in bytes
+  int64 size_bytes = 4;
+  
+  // Duration in ms (for audio files)
+  int64 duration_ms = 5;
+  
+  // Dimensions (for images)
+  int32 width = 6;
+  int32 height = 7;
+  
+  // Relative path on server (for debugging)
+  string path = 8;
+}
+
+message GetFileRequest {
+  string file_id = 1;
+}
+
+message GetFileResponse {
+  // File metadata
+  FileSummary metadata = 1;
+  
+  // File content bytes
+  bytes content = 2;
+  
+  // MIME type for browser display
+  string content_type = 3;
+}
+
+message DeleteFilesRequest {
+  // File IDs to delete
+  repeated string file_ids = 1;
+}
+
+message DeleteFilesResponse {
+  // Number of files successfully deleted
+  int32 deleted_count = 1;
+  
+  // Any files that failed to delete
+  repeated string failed_file_ids = 2;
+  
+  // Error message if any failures
+  string error_message = 3;
+}
+
+message ClearDeviceRequest {
+  // Device to clear all data for
+  string device_id = 1;
+}
+
+message ClearDeviceResponse {
+  // Number of files deleted
+  int64 deleted_count = 1;
+  
+  // Bytes freed
+  int64 bytes_freed = 2;
+  
+  bool success = 3;
+  string error_message = 4;
+}
+
+message GetStatsRequest {}
+
+message GetStatsResponse {
+  // Total storage used across all devices
+  int64 total_storage_bytes = 1;
+  
+  // Total number of devices
+  int32 device_count = 2;
+  
+  // Total audio chunks
+  int64 total_audio_chunks = 3;
+  
+  // Total image frames
+  int64 total_image_frames = 4;
+  
+  // Total prompts
+  int64 total_prompts = 5;
+  
+  // Oldest data timestamp
+  int64 oldest_data_ms = 6;
+  
+  // Newest data timestamp
+  int64 newest_data_ms = 7;
+}

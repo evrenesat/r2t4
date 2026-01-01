@@ -1,0 +1,140 @@
+// R2T4 Prompt Service
+// Handles wake-word triggered voice prompts and responses.
+
+syntax = "proto3";
+
+package r2t4.v1;
+
+import "r2t4/v1/common.proto";
+
+option go_package = "github.com/evren/r2t4/server/gen/r2t4/v1;r2t4v1";
+
+// PromptService handles voice prompt submission and response retrieval.
+// Triggered when wake word is detected on the client.
+service PromptService {
+  // Submit prompt audio as a stream of chunks.
+  // Client streams audio as user speaks, server acknowledges receipt.
+  // This enables future server-side VAD and wake-word detection.
+  rpc SubmitPrompt(stream SubmitPromptRequest) returns (SubmitPromptResponse);
+  
+  // Poll for the response to a submitted prompt.
+  // In MVP1, returns immediately with placeholder response.
+  // In future, may block briefly or use server-streaming.
+  rpc GetPromptResponse(GetPromptResponseRequest) returns (GetPromptResponseResponse);
+  
+  // Cancel a pending or in-progress prompt.
+  // Called when user presses Cancel button during prompt capture.
+  rpc CancelPrompt(CancelPromptRequest) returns (CancelPromptResponse);
+}
+
+// SubmitPromptRequest represents a portion of prompt audio being streamed.
+message SubmitPromptRequest {
+  // Device identification (should be same across all chunks in a prompt)
+  DeviceInfo device = 1;
+  
+  // Client-generated UUID for this prompt session
+  string prompt_id = 2;
+  
+  // Zero-based index of this chunk within the prompt
+  int32 chunk_index = 3;
+  
+  // Raw audio data for this chunk
+  bytes audio_data = 4;
+  
+  // True if this is the final chunk (user finished speaking or timeout)
+  bool is_final = 5;
+  
+  // Timestamp when this chunk was captured
+  int64 timestamp_ms = 6;
+  
+  // Reason for ending (only set when is_final is true)
+  PromptEndReason end_reason = 7;
+}
+
+// Reason the prompt capture ended
+enum PromptEndReason {
+  PROMPT_END_REASON_UNSPECIFIED = 0;
+  // User pressed "Done/Send" button
+  PROMPT_END_REASON_USER_DONE = 1;
+  // VAD detected silence
+  PROMPT_END_REASON_SILENCE = 2;
+  // Timeout reached (e.g., 15 seconds)
+  PROMPT_END_REASON_TIMEOUT = 3;
+  // User pressed "Cancel" button
+  PROMPT_END_REASON_CANCELLED = 4;
+}
+
+message SubmitPromptResponse {
+  // Echo back the client-generated prompt_id
+  string prompt_id = 1;
+  
+  // Server-assigned request ID for tracking in logs
+  string request_id = 2;
+  
+  // Whether the prompt was accepted for processing
+  bool accepted = 3;
+  
+  // Error message if not accepted
+  string error_message = 4;
+  
+  // Position in queue (1 = processing now, 2+ = waiting)
+  int32 queue_position = 5;
+}
+
+message GetPromptResponseRequest {
+  // The prompt to get response for
+  string prompt_id = 1;
+  
+  // Device ID for validation
+  string device_id = 2;
+}
+
+message GetPromptResponseResponse {
+  // Echo back prompt_id
+  string prompt_id = 1;
+  
+  // Current processing status
+  PromptStatus status = 2;
+  
+  // Response text (populated when status is COMPLETED)
+  // MVP1: timestamp echo
+  // Future: LLM-generated response
+  string response_text = 3;
+  
+  // When the response was generated
+  int64 processed_at_ms = 4;
+  
+  // Error details if status is FAILED
+  string error_message = 5;
+  
+  // Duration of prompt audio in milliseconds (for debugging)
+  int64 prompt_duration_ms = 6;
+}
+
+// Status of prompt processing
+enum PromptStatus {
+  PROMPT_STATUS_UNSPECIFIED = 0;
+  // Prompt is in queue waiting to be processed
+  PROMPT_STATUS_QUEUED = 1;
+  // Prompt is currently being processed
+  PROMPT_STATUS_PROCESSING = 2;
+  // Prompt processing completed successfully
+  PROMPT_STATUS_COMPLETED = 3;
+  // Prompt processing failed
+  PROMPT_STATUS_FAILED = 4;
+  // Prompt was cancelled by user
+  PROMPT_STATUS_CANCELLED = 5;
+  // Prompt not found (invalid prompt_id)
+  PROMPT_STATUS_NOT_FOUND = 6;
+}
+
+message CancelPromptRequest {
+  string prompt_id = 1;
+  string device_id = 2;
+}
+
+message CancelPromptResponse {
+  string prompt_id = 1;
+  bool success = 2;
+  string error_message = 3;
+}
