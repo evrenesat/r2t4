@@ -170,7 +170,7 @@ class AudioRecorder(private val context: Context) {
 
         var samplesInChunk = 0
 
-        while (isRecording && coroutineContext.isActive) {
+        while (isRecording && currentCoroutineContext().isActive) {
             val readResult = record.read(frameBuffer, 0, FRAME_SIZE)
 
             if (readResult > 0) {

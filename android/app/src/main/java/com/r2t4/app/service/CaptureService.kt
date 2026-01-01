@@ -104,7 +104,7 @@ class CaptureService : LifecycleService() {
             ACTION_PROMPT_CANCEL -> promptRecorder.userCancel()
         }
 
-        return START_STICKY
+        return Service.START_STICKY
     }
 
     override fun onBind(intent: Intent): IBinder? {
@@ -286,7 +286,7 @@ class CaptureService : LifecycleService() {
         updateState { CaptureState() }
         addLog("R2T4 capture stopped", LogType.INFO)
 
-        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopForeground(Service.STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 

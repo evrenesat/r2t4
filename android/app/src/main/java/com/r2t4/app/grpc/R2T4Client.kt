@@ -3,7 +3,7 @@ package com.r2t4.app.grpc
 import android.util.Log
 import com.connectrpc.ConnectException
 import com.connectrpc.ProtocolClientConfig
-import com.connectrpc.extensions.GoogleJavaLiteProtobufStrategy
+import com.connectrpc.extensions.GoogleJavaProtobufStrategy
 import com.connectrpc.impl.ProtocolClient
 import com.connectrpc.okhttp.ConnectOkHttpClient
 import com.connectrpc.protocols.NetworkProtocol
@@ -13,6 +13,7 @@ import com.r2t4.app.camera.ImageCapturer
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 
@@ -48,7 +49,7 @@ class R2T4Client {
             httpClient = ConnectOkHttpClient(okHttpClient),
             ProtocolClientConfig(
                 host = serverAddress,
-                serializationStrategy = GoogleJavaLiteProtobufStrategy(),
+                serializationStrategy = GoogleJavaProtobufStrategy(),
                 networkProtocol = NetworkProtocol.CONNECT,
             )
         )
@@ -218,28 +219,28 @@ class R2T4Client {
     private fun createAudioChunkRequest(deviceId: String, chunk: AudioRecorder.AudioChunk): okhttp3.RequestBody {
         // In real implementation, serialize protobuf message
         return okhttp3.RequestBody.create(
-            okhttp3.MediaType.parse("application/octet-stream"),
+            "application/octet-stream".toMediaTypeOrNull(),
             chunk.wavData
         )
     }
 
     private fun createImageFrameRequest(deviceId: String, frame: ImageCapturer.ImageFrame): okhttp3.RequestBody {
         return okhttp3.RequestBody.create(
-            okhttp3.MediaType.parse("application/octet-stream"),
+            "application/octet-stream".toMediaTypeOrNull(),
             frame.jpegData
         )
     }
 
     private fun createPromptChunkRequest(deviceId: String, chunk: PromptRecorder.PromptChunk): okhttp3.RequestBody {
         return okhttp3.RequestBody.create(
-            okhttp3.MediaType.parse("application/octet-stream"),
+            "application/octet-stream".toMediaTypeOrNull(),
             chunk.audioData
         )
     }
 
     private fun createGetPromptRequest(deviceId: String, promptId: String): okhttp3.RequestBody {
         return okhttp3.RequestBody.create(
-            okhttp3.MediaType.parse("application/json"),
+            "application/json".toMediaTypeOrNull(),
             """{"device_id":"$deviceId","prompt_id":"$promptId"}"""
         )
     }
