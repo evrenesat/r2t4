@@ -27,7 +27,7 @@ class UploadManager(
     // Upload queues
     private val audioQueue = Channel<AudioRecorder.AudioChunk>(Channel.BUFFERED)
     private val imageQueue = Channel<ImageCapturer.ImageFrame>(Channel.BUFFERED)
-    private val promptQueue = Channel<PromptRecorder.PromptChunk>(Channel.BUFFERED)
+    private val promptQueue = Channel<PromptRecorder.PromptResult>(Channel.BUFFERED)
 
     // State
     private var uploadJob: Job? = null
@@ -38,7 +38,7 @@ class UploadManager(
     private var audioChunksAcked = 0
     private var imagesSent = 0
     private var imagesAcked = 0
-    private var promptChunksSent = 0
+    private var promptsSent = 0
 
     // Backlog tracking
     private var oldestPendingTimestamp = 0L
@@ -113,14 +113,14 @@ class UploadManager(
     }
 
     /**
-     * Queue a prompt chunk for upload (priority).
+     * Queue a full prompt for upload (priority).
      */
-    suspend fun queuePromptChunk(chunk: PromptRecorder.PromptChunk) {
+    suspend fun queuePrompt(result: PromptRecorder.PromptResult) {
         if (!isRunning) return
 
         // Prompts are priority - always queue
-        promptQueue.send(chunk)
-        promptChunksSent++
+        promptQueue.send(result)
+        promptsSent++
     }
 
     /**
@@ -221,23 +221,27 @@ class UploadManager(
      * Process prompt upload queue (priority).
      */
     private suspend fun processPromptQueue() {
-        for (chunk in promptQueue) {
+        for (promptResult in promptQueue) {
             if (!isRunning) break
+
+            Log.d(TAG, "Uploading full prompt: ${promptResult.promptId}")
 
             // Prompts get more retries and shorter delays
             var retries = 0
             var success = false
 
             while (retries < MAX_RETRIES * 2 && !success) {
-                when (val result = client.uploadPromptChunk(deviceId, chunk)) {
+                when (val result = client.uploadFullPrompt(deviceId, promptResult)) {
                     is R2T4Client.UploadResult.Success -> {
                         success = true
-                        Log.d(TAG, "Prompt chunk uploaded: ${chunk.promptId}/${chunk.chunkIndex}")
+                        Log.d(TAG, "Prompt uploaded: ${promptResult.promptId}")
                     }
                     is R2T4Client.UploadResult.Error -> {
                         retries++
                         if (retries < MAX_RETRIES * 2) {
                             delay(500L)
+                        } else {
+                            Log.e(TAG, "Prompt upload failed finally: ${result.message}")
                         }
                     }
                 }
@@ -271,7 +275,7 @@ class UploadManager(
         "audioChunksAcked" to audioChunksAcked,
         "imagesSent" to imagesSent,
         "imagesAcked" to imagesAcked,
-        "promptChunksSent" to promptChunksSent,
+        "promptsSent" to promptsSent,
         "pendingCount" to pendingCount
     )
 }

@@ -139,51 +139,57 @@ class R2T4Client {
     }
 
     /**
-     * Upload prompt audio chunk.
+     * Upload full prompt audio in a single request (Client Streaming simulated).
+     * Uses Connect Protocol framing manually.
      */
-    suspend fun uploadPromptChunk(
+    suspend fun uploadFullPrompt(
         deviceId: String,
-        chunk: PromptRecorder.PromptChunk
+        result: PromptRecorder.PromptResult
     ): UploadResult = withContext(Dispatchers.IO) {
         try {
-            // For MVP1, simplified JSON implementation
-            // Real impl should use streaming RPC or at least SendPromptRequest structure
-            // But PromptService expects SubmitPromptRequest which has different fields
-
-            // NOTE: Streaming RPCs over JSON might not work simply with unary POSTs in Connect-Go?
-            // Actually Connect supports unary JSON POST for unary methods.
-            // But SubmitPrompt is a STREAMING method.
-            // Connect-Go handles streaming over HTTP/1.1 with special framing if using connect protocol.
-            // Simple JSON POST only works for UNARY methods usually.
-
-            // CRITICAL: SubmitPrompt is `rpc SubmitPrompt(stream SubmitPromptRequest) returns (stream SubmitPromptResponse)`
-            // We cannot just POST JSON to it easily with a standard HTTP client without framing.
-
-            // Fallback for MVP1: Just skip prompt upload OR accept we need generated client.
-            // But we already implemented server side as streaming.
-
-            // WORKAROUND: For MVP1 debugging, we will log that prompt uploading requires generated client or proto.
-            // However, the user wants it to work.
-            // Since we are fixing 415 for Unary calls (UploadAudioChunk), let's focus on that first.
-            // Prompt might fail differently.
-
+            // Construct the JSON message
             val json = JSONObject().apply {
                 put("device", JSONObject().apply {
                     put("deviceId", deviceId)
                     put("clientTimestampMs", System.currentTimeMillis())
                 })
-                put("promptId", chunk.promptId)
-                put("chunkIndex", chunk.chunkIndex)
-                put("isFinal", chunk.isFinal)
-                put("audioData", Base64.encodeToString(chunk.audioData, Base64.NO_WRAP))
+                put("promptId", result.promptId)
+                put("chunkIndex", 0)
+                put("isFinal", true)
+                put("audioData", Base64.encodeToString(result.wavData, Base64.NO_WRAP))
+                put("timestampMs", result.endTimeMs)
+                put("endReason", when(result.endReason) {
+                    PromptRecorder.EndReason.USER_DONE -> 1
+                    PromptRecorder.EndReason.SILENCE -> 2
+                    PromptRecorder.EndReason.TIMEOUT -> 3
+                    PromptRecorder.EndReason.USER_CANCEL -> 4
+                })
             }
 
-            postJson("r2t4.v1.PromptService/SubmitPrompt", json.toString()).use { response ->
+            val jsonBytes = json.toString().toByteArray(Charsets.UTF_8)
+            
+            // Connect Protocol Framing:
+            // 1 byte flag (0x00 = Message) + 4 bytes length (Big Endian) + Message Body
+            val frame = ByteArray(5 + jsonBytes.size)
+            frame[0] = 0.toByte() // Flag: Message
+            
+            // Length (Big Endian)
+            val len = jsonBytes.size
+            frame[1] = ((len shr 24) and 0xFF).toByte()
+            frame[2] = ((len shr 16) and 0xFF).toByte()
+            frame[3] = ((len shr 8) and 0xFF).toByte()
+            frame[4] = (len and 0xFF).toByte()
+            
+            // Body
+            System.arraycopy(jsonBytes, 0, frame, 5, len)
+
+            postConnectStream("r2t4.v1.PromptService/SubmitPrompt", frame).use { response ->
                 if (response.isSuccessful) {
-                    Log.d(TAG, "Prompt chunk uploaded: ${chunk.promptId}/${chunk.chunkIndex}")
-                    UploadResult.Success("ack-${chunk.promptId}-${chunk.chunkIndex}")
+                    Log.d(TAG, "Prompt uploaded successfully: ${result.promptId}")
+                    UploadResult.Success("ack-${result.promptId}")
                 } else {
                     Log.e(TAG, "Prompt upload failed: ${response.code}")
+                    // For Connect errors, the body might contain details, but we'll stick to code for now
                     UploadResult.Error("HTTP ${response.code}: ${response.message}")
                 }
             }
@@ -191,6 +197,16 @@ class R2T4Client {
             Log.e(TAG, "Error uploading prompt: ${e.message}")
             UploadResult.Error(e.message ?: "Unknown error")
         }
+    }
+
+    /**
+     * Deprecated: Chunk streaming not supported in simple JSON client. Use uploadFullPrompt.
+     */
+    suspend fun uploadPromptChunk(
+        deviceId: String,
+        chunk: PromptRecorder.PromptChunk
+    ): UploadResult {
+        return UploadResult.Error("Chunk upload deprecated")
     }
 
     /**
@@ -234,6 +250,21 @@ class R2T4Client {
             )
             .build()
         // Caller is responsible for closing response
+        return client.newCall(request).execute()
+    }
+
+    private fun postConnectStream(path: String, bodyBytes: ByteArray): okhttp3.Response {
+        // Connect Protocol for streaming requires specific content type
+        val request = okhttp3.Request.Builder()
+            .url("$serverAddress/$path")
+            .header("Connect-Protocol-Version", "1")
+            .post(
+                okhttp3.RequestBody.create(
+                    "application/connect+json".toMediaTypeOrNull(),
+                    bodyBytes
+                )
+            )
+            .build()
         return client.newCall(request).execute()
     }
 

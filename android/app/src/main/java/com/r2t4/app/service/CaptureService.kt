@@ -233,9 +233,12 @@ class CaptureService : LifecycleService() {
                         else -> {
                             addLog("Prompt recorded (${result.endTimeMs - result.startTimeMs}ms)", LogType.INFO)
                             
+                            // Upload full prompt
+                            uploadManager?.queuePrompt(result)
+                            
                             // Get response from server
                             launch {
-                                delay(500) // Give server time to process
+                                delay(1000) // Give server time to process upload
                                 when (val response = grpcClient.getPromptResponse(
                                     currentSettings.deviceId,
                                     result.promptId
@@ -254,12 +257,8 @@ class CaptureService : LifecycleService() {
                 }
             }
 
-            // Collect prompt chunks for streaming upload
-            launch {
-                promptRecorder.promptChunks.collect { chunk ->
-                    uploadManager?.queuePromptChunk(chunk)
-                }
-            }
+            // Chunk collection removed as we now upload full prompt at once
+
 
             // Collect image frames for upload
             launch {
