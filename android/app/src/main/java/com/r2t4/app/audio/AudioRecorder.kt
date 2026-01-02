@@ -104,8 +104,16 @@ class AudioRecorder(private val context: Context) {
         val bufferSize = maxOf(minBufferSize * 2, SAMPLE_RATE * 2) // At least 1 second
 
         try {
+            val audioSource = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                MediaRecorder.AudioSource.UNPROCESSED
+            } else {
+                MediaRecorder.AudioSource.MIC
+            }
+
+            Log.i(TAG, "Initializing AudioRecord with source=$audioSource, rate=$SAMPLE_RATE, buf=$bufferSize")
+
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.VOICE_RECOGNITION,
+                audioSource,
                 SAMPLE_RATE,
                 CHANNEL_CONFIG,
                 AUDIO_FORMAT,
@@ -183,9 +191,12 @@ class AudioRecorder(private val context: Context) {
                 }
                 val rms = Math.sqrt(sum / readResult)
                 if (rms < 1.0) {
-                     Log.w(TAG, "Silence detected! RMS: $rms")
+                     // Log as INFO to ensure visibility on release builds/older devices
+                     if (System.currentTimeMillis() % 2000 < 50) { // Throttle log
+                        Log.i(TAG, "Silence detected! RMS: $rms")
+                     }
                 } else if (System.currentTimeMillis() % 10000 < 1000) { // Log occasionally
-                     Log.d(TAG, "Audio Signal RMS: $rms")
+                     Log.i(TAG, "Audio Signal RMS: $rms")
                 }
 
                 launch {
