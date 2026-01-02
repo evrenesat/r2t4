@@ -265,9 +265,18 @@ class ImageCapturer(private val context: Context) {
                 bitmap = Bitmap.createBitmap(bitmap, 0, 0, bitmap.width, bitmap.height, matrix, true)
             }
 
-            // Scale to target size if needed
-            if (bitmap.width != imageWidth || bitmap.height != imageHeight) {
-                bitmap = Bitmap.createScaledBitmap(bitmap, imageWidth, imageHeight, true)
+            // Scale to target size if needed, but PRESERVE ASPECT RATIO
+            if (bitmap.width > imageWidth || bitmap.height > imageHeight) {
+                val ratio = bitmap.width.toFloat() / bitmap.height.toFloat()
+                var newWidth = imageWidth
+                var newHeight = (newWidth / ratio).toInt()
+
+                if (newHeight > imageHeight) {
+                    newHeight = imageHeight
+                    newWidth = (newHeight * ratio).toInt()
+                }
+
+                bitmap = Bitmap.createScaledBitmap(bitmap, newWidth, newHeight, true)
             }
 
             // Compress to JPEG
