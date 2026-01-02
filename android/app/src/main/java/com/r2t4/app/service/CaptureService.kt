@@ -185,7 +185,7 @@ class CaptureService : LifecycleService() {
 
             // Start audio recording
             if (audioRecorder.hasPermission()) {
-                audioRecorder.start(lifecycleScope)
+                audioRecorder.start(lifecycleScope, currentSettings.micSource)
                 
                 // Collect audio chunks for upload
                 launch {

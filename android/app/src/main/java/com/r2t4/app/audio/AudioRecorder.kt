@@ -82,8 +82,9 @@ class AudioRecorder(private val context: Context) {
     /**
      * Start audio recording.
      * Emits audio chunks every [chunkDurationSeconds] seconds.
+     * @param audioSource Optional audio source (e.g. MediaRecorder.AudioSource.MIC). If 0, uses default logic.
      */
-    fun start(scope: CoroutineScope) {
+    fun start(scope: CoroutineScope, audioSource: Int = 0) {
         if (isRecording) {
             Log.w(TAG, "Already recording")
             return
@@ -104,16 +105,20 @@ class AudioRecorder(private val context: Context) {
         val bufferSize = maxOf(minBufferSize * 2, SAMPLE_RATE * 2) // At least 1 second
 
         try {
-            val audioSource = if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
-                MediaRecorder.AudioSource.UNPROCESSED
+            val finalAudioSource = if (audioSource > 0) {
+                audioSource
             } else {
-                MediaRecorder.AudioSource.MIC
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.N) {
+                    MediaRecorder.AudioSource.UNPROCESSED
+                } else {
+                    MediaRecorder.AudioSource.MIC
+                }
             }
 
-            Log.i(TAG, "Initializing AudioRecord with source=$audioSource, rate=$SAMPLE_RATE, buf=$bufferSize")
+            Log.i(TAG, "Initializing AudioRecord with source=$finalAudioSource, rate=$SAMPLE_RATE, buf=$bufferSize")
 
             audioRecord = AudioRecord(
-                audioSource,
+                finalAudioSource,
                 SAMPLE_RATE,
                 CHANNEL_CONFIG,
                 AUDIO_FORMAT,

@@ -28,6 +28,7 @@ class SettingsRepository(private val context: Context) {
         private val KEY_PROMPT_TIMEOUT = intPreferencesKey("prompt_timeout")
         private val KEY_PUSH_TO_TALK_MODE = booleanPreferencesKey("push_to_talk_mode")
         private val KEY_PORCUPINE_ACCESS_KEY = stringPreferencesKey("porcupine_access_key")
+        private val KEY_MIC_SOURCE = intPreferencesKey("mic_source")
     }
 
     /**
@@ -41,7 +42,8 @@ class SettingsRepository(private val context: Context) {
         val photoQuality: Int = 70,            // 0-100
         val promptTimeout: Int = 15,           // seconds
         val pushToTalkMode: Boolean = false,   // fallback if wake word fails
-        val porcupineAccessKey: String = ""    // Picovoice API key
+        val porcupineAccessKey: String = "",   // Picovoice API key
+        val micSource: Int = 1                 // MediaRecorder.AudioSource.MIC (default)
     )
 
     /**
@@ -64,7 +66,8 @@ class SettingsRepository(private val context: Context) {
                 photoQuality = prefs[KEY_PHOTO_QUALITY] ?: Settings().photoQuality,
                 promptTimeout = prefs[KEY_PROMPT_TIMEOUT] ?: Settings().promptTimeout,
                 pushToTalkMode = prefs[KEY_PUSH_TO_TALK_MODE] ?: Settings().pushToTalkMode,
-                porcupineAccessKey = prefs[KEY_PORCUPINE_ACCESS_KEY] ?: Settings().porcupineAccessKey
+                porcupineAccessKey = prefs[KEY_PORCUPINE_ACCESS_KEY] ?: Settings().porcupineAccessKey,
+                micSource = prefs[KEY_MIC_SOURCE] ?: Settings().micSource
             )
         }
 
@@ -141,6 +144,15 @@ class SettingsRepository(private val context: Context) {
     }
 
     /**
+     * Update microphone source.
+     */
+    suspend fun setMicSource(value: Int) {
+        context.dataStore.edit { prefs ->
+            prefs[KEY_MIC_SOURCE] = value
+        }
+    } 
+
+    /**
      * Update all settings at once.
      */
     suspend fun updateSettings(settings: Settings) {
@@ -153,6 +165,7 @@ class SettingsRepository(private val context: Context) {
             prefs[KEY_PROMPT_TIMEOUT] = settings.promptTimeout
             prefs[KEY_PUSH_TO_TALK_MODE] = settings.pushToTalkMode
             prefs[KEY_PORCUPINE_ACCESS_KEY] = settings.porcupineAccessKey
+            prefs[KEY_MIC_SOURCE] = settings.micSource
         }
     }
 }

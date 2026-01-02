@@ -119,6 +119,55 @@ fun SettingsScreen(
                 supportingText = { Text("Maximum prompt recording time, default: 15") }
             )
 
+            // Microphone Source Dropdown
+            var micExpanded by remember { mutableStateOf(false) }
+            val micOptions = mapOf(
+                0 to "Default (Best Effort)",
+                1 to "Microphone",
+                5 to "Camcorder (Rear Mic)",
+                6 to "Voice Recognition",
+                7 to "Voice Communication",
+                9 to "Unprocessed"
+            )
+            
+            ExposedDropdownMenuBox(
+                expanded = micExpanded,
+                onExpandedChange = { micExpanded = !micExpanded },
+                modifier = Modifier.fillMaxWidth()
+            ) {
+                OutlinedTextField(
+                    readOnly = true,
+                    value = micOptions[settings.micSource] ?: "Unknown",
+                    onValueChange = { },
+                    label = { Text("Microphone Source") },
+                    trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = micExpanded) },
+                    colors = ExposedDropdownMenuDefaults.outlinedTextFieldColors(),
+                    modifier = Modifier.menuAnchor().fillMaxWidth()
+                )
+                
+                ExposedDropdownMenu(
+                    expanded = micExpanded,
+                    onDismissRequest = { micExpanded = false }
+                ) {
+                    micOptions.forEach { (value, label) ->
+                        DropdownMenuItem(
+                            text = { Text(label) },
+                            onClick = {
+                                onSettingsChanged(settings.copy(micSource = value))
+                                micExpanded = false
+                            },
+                             contentPadding = ExposedDropdownMenuDefaults.ItemContentPadding
+                        )
+                    }
+                }
+            }
+            Text(
+                text = "Use 'Camcorder' for rear mic to boost distant audio.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(start = 16.dp, top = 4.dp)
+            )
+
             Divider(modifier = Modifier.padding(vertical = 8.dp))
 
             // Camera section
