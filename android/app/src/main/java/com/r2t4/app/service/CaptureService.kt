@@ -147,7 +147,13 @@ class CaptureService : LifecycleService() {
 
                 // Initialize wake word detector
                 val wakeWordEnabled = if (!settings.pushToTalkMode && settings.porcupineAccessKey.isNotBlank()) {
-                    wakeWordDetector.initialize(settings.porcupineAccessKey)
+                    val success = wakeWordDetector.initialize(settings.porcupineAccessKey)
+                    if (!success) {
+                        wakeWordDetector.lastError?.let { error ->
+                            addLog(error, LogType.ERROR)
+                        }
+                    }
+                    success
                 } else {
                     false
                 }

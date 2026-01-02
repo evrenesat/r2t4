@@ -244,11 +244,11 @@ fun SettingsScreen(
                 ) {
                     Column(modifier = Modifier.padding(16.dp)) {
                         Text(
-                            text = "Wake Word: \"Porcupine\"",
+                            text = "Wake Word: \"R2T4\"",
                             style = MaterialTheme.typography.titleSmall
                         )
                         Text(
-                            text = "Say \"Porcupine\" to start a prompt. Custom wake words require training at Picovoice Console.",
+                            text = "Say \"R2T4\" (R-two-T-four) to start a prompt.",
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onPrimaryContainer
                         )

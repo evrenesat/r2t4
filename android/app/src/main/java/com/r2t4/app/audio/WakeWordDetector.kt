@@ -25,6 +25,8 @@ class WakeWordDetector(private val context: Context) {
     private var porcupine: Porcupine? = null
     private var isInitialized = false
     private var accessKey: String = ""
+    var lastError: String? = null
+        private set
 
     // Flow for wake word detection events
     private val _wakeWordDetected = MutableSharedFlow<Long>(replay = 0, extraBufferCapacity = 5)
@@ -34,32 +36,73 @@ class WakeWordDetector(private val context: Context) {
      * Initialize Porcupine with the given access key.
      * Returns true if successful, false if failed (push-to-talk fallback).
      */
+    /**
+     * Initialize Porcupine with the given access key.
+     * Returns true if successful, false if failed (push-to-talk fallback).
+     */
     fun initialize(accessKey: String): Boolean {
         this.accessKey = accessKey
+        lastError = null
         
         if (accessKey.isBlank()) {
-            Log.w(TAG, "No Porcupine access key provided, wake word disabled")
+            val msg = "No Porcupine access key provided"
+            Log.w(TAG, msg)
+            lastError = msg
             return false
         }
 
         try {
+            // Extract wake word file from resources
+            val keywordPath = extractWakeWordFile()
+            if (keywordPath == null) {
+                val msg = "Failed to extract wake word file"
+                Log.e(TAG, msg)
+                lastError = msg
+                return false
+            }
+
             porcupine = Porcupine.Builder()
                 .setAccessKey(accessKey)
-                .setKeyword(BUILT_IN_KEYWORD)
+                .setKeywordPath(keywordPath)
+                // .setModelPath() // Use default model path
                 .build(context)
 
             isInitialized = true
-            Log.i(TAG, "Porcupine initialized successfully with keyword: ${BUILT_IN_KEYWORD.name}")
+            Log.i(TAG, "Porcupine initialized successfully with custom keyword: R2T4")
             return true
 
         } catch (e: PorcupineException) {
-            Log.e(TAG, "Failed to initialize Porcupine: ${e.message}")
+            val msg = "Failed to initialize Porcupine: ${e.message}"
+            Log.e(TAG, msg)
+            lastError = msg
             isInitialized = false
             return false
         } catch (e: Exception) {
-            Log.e(TAG, "Unexpected error initializing Porcupine: ${e.message}")
+            val msg = "Unexpected error initializing Porcupine: ${e.message}"
+            Log.e(TAG, msg, e)
+            lastError = msg
             isInitialized = false
             return false
+        }
+    }
+
+    private fun extractWakeWordFile(): String? {
+        return try {
+            val inputStream = context.resources.openRawResource(com.r2t4.app.R.raw.r_two_t_four)
+            val file = java.io.File(context.filesDir, "r_two_t_four.ppn")
+            
+            // Should probably check if file exists and has correct hash/size, but overwrite for now to ensure update
+            val outputStream = java.io.FileOutputStream(file)
+            inputStream.use { input ->
+                outputStream.use { output ->
+                    input.copyTo(output)
+                }
+            }
+            
+            file.absolutePath
+        } catch (e: Exception) {
+            Log.e(TAG, "Error extracting resource: ${e.message}")
+            null
         }
     }
 
