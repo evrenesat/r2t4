@@ -153,11 +153,19 @@ class CaptureService : LifecycleService() {
                 }
 
                 // Initialize camera
-                val cameraEnabled = imageCapturer.hasPermission() && imageCapturer.hasCameraHardware()
-                if (cameraEnabled) {
+                var isCameraEnabled = imageCapturer.hasPermission() && imageCapturer.hasCameraHardware()
+                if (isCameraEnabled) {
                     imageCapturer.captureIntervalSeconds = settings.photoInterval
                     imageCapturer.jpegQuality = settings.photoQuality
-                    // Camera initialization requires lifecycle owner - done in MainActivity
+                    // Initialize camera using Service as LifecycleOwner
+                    val initSuccess = imageCapturer.initialize(this@CaptureService)
+                    if (initSuccess) {
+                        imageCapturer.startCapture(lifecycleScope)
+                        addLog("Camera capture started", LogType.INFO)
+                    } else {
+                        Log.e(TAG, "Failed to initialize camera in service")
+                        isCameraEnabled = false
+                    }
                 }
 
                 updateState {
@@ -165,7 +173,7 @@ class CaptureService : LifecycleService() {
                         isRunning = true,
                         isListening = true,
                         wakeWordEnabled = wakeWordEnabled,
-                        cameraEnabled = cameraEnabled
+                        cameraEnabled = isCameraEnabled
                     )
                 }
 

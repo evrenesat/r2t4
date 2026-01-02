@@ -105,7 +105,7 @@ class AudioRecorder(private val context: Context) {
 
         try {
             audioRecord = AudioRecord(
-                MediaRecorder.AudioSource.MIC,
+                MediaRecorder.AudioSource.VOICE_RECOGNITION,
                 SAMPLE_RATE,
                 CHANNEL_CONFIG,
                 AUDIO_FORMAT,
@@ -163,6 +163,7 @@ class AudioRecorder(private val context: Context) {
      */
     private suspend fun recordLoop() {
         val record = audioRecord ?: return
+        coroutineScope {
         val frameBuffer = ShortArray(FRAME_SIZE)
         val chunkBuffer = ByteArrayOutputStream()
         var chunkStartTime = System.currentTimeMillis()
@@ -174,10 +175,23 @@ class AudioRecorder(private val context: Context) {
             val readResult = record.read(frameBuffer, 0, FRAME_SIZE)
 
             if (readResult > 0) {
-                // Emit frame for wake word detection
-                val frame = frameBuffer.copyOf(readResult)
-                _audioFrames.tryEmit(frame)
+                // Calculate RMS amplitude to verify audio is not silent
+                var sum = 0.0
+                for (i in 0 until readResult) {
+                     val sample = frameBuffer[i].toInt()
+                     sum += sample * sample
+                }
+                val rms = Math.sqrt(sum / readResult)
+                if (rms < 1.0) {
+                     Log.w(TAG, "Silence detected! RMS: $rms")
+                } else if (System.currentTimeMillis() % 10000 < 1000) { // Log occasionally
+                     Log.d(TAG, "Audio Signal RMS: $rms")
+                }
 
+                launch {
+                    val frame = frameBuffer.copyOfRange(0, readResult)
+                    _audioFrames.emit(frame)
+                }
                 // Add to chunk buffer (convert short to bytes)
                 for (i in 0 until readResult) {
                     val sample = frameBuffer[i].toInt()
@@ -212,8 +226,10 @@ class AudioRecorder(private val context: Context) {
                 Log.e(TAG, "AudioRecord read error: $readResult")
                 delay(100) // Brief delay before retry
             }
+                }
         }
     }
+
 
     /**
      * Create a WAV file from raw PCM data.

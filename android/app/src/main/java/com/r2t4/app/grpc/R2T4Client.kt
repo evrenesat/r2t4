@@ -36,6 +36,12 @@ class R2T4Client {
 
     private var serverAddress: String = ""
 
+    private val client = OkHttpClient.Builder()
+        .connectTimeout(30, TimeUnit.SECONDS)
+        .writeTimeout(30, TimeUnit.SECONDS)
+        .readTimeout(30, TimeUnit.SECONDS)
+        .build()
+
     /**
      * Initialize the client with the server address.
      */
@@ -74,7 +80,7 @@ class R2T4Client {
                 put("channels", chunk.channels)
             }
 
-            postJson("r2t4.v1.UploadService/UploadAudioChunk", json.toString()).let { response ->
+            postJson("r2t4.v1.UploadService/UploadAudioChunk", json.toString()).use { response ->
                 if (response.isSuccessful) {
                     val ackId = "ack-${chunk.sequenceNumber}"
                     Log.d(TAG, "Audio chunk uploaded: seq=${chunk.sequenceNumber}")
@@ -116,7 +122,7 @@ class R2T4Client {
                 put("quality", frame.quality)
             }
 
-            postJson("r2t4.v1.UploadService/UploadImageFrame", json.toString()).let { response ->
+            postJson("r2t4.v1.UploadService/UploadImageFrame", json.toString()).use { response ->
                 if (response.isSuccessful) {
                     val ackId = "ack-${frame.sequenceNumber}"
                     Log.d(TAG, "Image frame uploaded: seq=${frame.sequenceNumber}")
@@ -143,26 +149,44 @@ class R2T4Client {
             // For MVP1, simplified JSON implementation
             // Real impl should use streaming RPC or at least SendPromptRequest structure
             // But PromptService expects SubmitPromptRequest which has different fields
-            
+
             // NOTE: Streaming RPCs over JSON might not work simply with unary POSTs in Connect-Go?
             // Actually Connect supports unary JSON POST for unary methods.
             // But SubmitPrompt is a STREAMING method.
             // Connect-Go handles streaming over HTTP/1.1 with special framing if using connect protocol.
             // Simple JSON POST only works for UNARY methods usually.
-            
+
             // CRITICAL: SubmitPrompt is `rpc SubmitPrompt(stream SubmitPromptRequest) returns (stream SubmitPromptResponse)`
             // We cannot just POST JSON to it easily with a standard HTTP client without framing.
-            
+
             // Fallback for MVP1: Just skip prompt upload OR accept we need generated client.
             // But we already implemented server side as streaming.
-            
+
             // WORKAROUND: For MVP1 debugging, we will log that prompt uploading requires generated client or proto.
             // However, the user wants it to work.
             // Since we are fixing 415 for Unary calls (UploadAudioChunk), let's focus on that first.
             // Prompt might fail differently.
-            
-            UploadResult.Success("skipped-prompt-upload")
-            
+
+            val json = JSONObject().apply {
+                put("device", JSONObject().apply {
+                    put("deviceId", deviceId)
+                    put("clientTimestampMs", System.currentTimeMillis())
+                })
+                put("promptId", chunk.promptId)
+                put("chunkIndex", chunk.chunkIndex)
+                put("isFinal", chunk.isFinal)
+                put("audioData", Base64.encodeToString(chunk.audioData, Base64.NO_WRAP))
+            }
+
+            postJson("r2t4.v1.PromptService/SubmitPrompt", json.toString()).use { response ->
+                if (response.isSuccessful) {
+                    Log.d(TAG, "Prompt chunk uploaded: ${chunk.promptId}/${chunk.chunkIndex}")
+                    UploadResult.Success("ack-${chunk.promptId}-${chunk.chunkIndex}")
+                } else {
+                    Log.e(TAG, "Prompt upload failed: ${response.code}")
+                    UploadResult.Error("HTTP ${response.code}: ${response.message}")
+                }
+            }
         } catch (e: Exception) {
             Log.e(TAG, "Error uploading prompt: ${e.message}")
             UploadResult.Error(e.message ?: "Unknown error")
@@ -182,7 +206,7 @@ class R2T4Client {
                 put("promptId", promptId)
             }
 
-            postJson("r2t4.v1.PromptService/GetPromptResponse", json.toString()).let { response ->
+            postJson("r2t4.v1.PromptService/GetPromptResponse", json.toString()).use { response ->
                 if (response.isSuccessful) {
                     PromptResponse.Completed(
                         promptId = promptId,
@@ -199,20 +223,17 @@ class R2T4Client {
         }
     }
 
-    private fun postJson(method: String, jsonBody: String): okhttp3.Response {
-        val client = OkHttpClient.Builder()
-            .connectTimeout(30, TimeUnit.SECONDS)
-            .writeTimeout(30, TimeUnit.SECONDS)
-            .readTimeout(30, TimeUnit.SECONDS)
-            .build()
-            
+    private fun postJson(path: String, jsonBody: String): okhttp3.Response {
         val request = okhttp3.Request.Builder()
-            .url("$serverAddress/$method")
-            // Connect expects explicit application/json content-type
-            .header("Content-Type", "application/json")
-            .post(okhttp3.RequestBody.create("application/json".toMediaTypeOrNull(), jsonBody))
+            .url("$serverAddress/$path")
+            .post(
+                okhttp3.RequestBody.create(
+                    "application/json; charset=utf-8".toMediaTypeOrNull(),
+                    jsonBody
+                )
+            )
             .build()
-            
+        // Caller is responsible for closing response
         return client.newCall(request).execute()
     }
 
