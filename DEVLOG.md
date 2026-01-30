@@ -25,6 +25,44 @@
 
 ## Session Log
 
+### 2026-01-30 - Plugin System Implementation
+
+**Context:** To support diverse extracurricular features like subtitle lookups, web searches, and IMDB metadata fetching without bloating the core server, a modular plugin system was required. This allows users to add custom processing capabilities as independent executables.
+
+**Changes Made:**
+- `proto/r2t4/v1/plugin.proto` - Defined `PluginService` for remote management (List, Register, Unregister, Status, Test)
+- `server/internal/plugin/manager.go` - Implemented plugin registry with persistence in `plugins.json`
+- `server/internal/plugin/executor.go` - Implemented spawn-and-exit execution model using JSON over stdin/stdout
+- `server/internal/plugin/logger.go` - Added in-memory interaction logging for real-time debugging
+- `server/internal/handler/plugin.go` - Exposed plugin management via Connect-RPC
+- `server/internal/web/index.html` - Enhanced admin dashboard with a dedicated "Plugins" section for management and interaction logging
+
+**Why:** A spawn-and-exit model (similar to CGI or simple CLI tools) provides the easiest path for plugin developers. It avoids complex shared memory or long-running daemon requirements, ensures crash isolation, and allows plugins to be written in any language that can handle JSON and stdin/stdout.
+
+**How:**
+The system relies on a two-mode execution protocol:
+1. **Handshake:** Run with `--handshake` to receive a JSON object describing the plugin's name, version, and capabilities.
+2. **Execute:** Run with `--execute`, passing a `PluginRequest` JSON via stdin and reading a `PluginResponse` JSON from stdout.
+
+**Technical Details:**
+```go
+// Example of the executor triggering a plugin
+cmd := exec.CommandContext(ctx, path, "--execute")
+cmd.Stdin = bytes.NewReader(requestJSON)
+output, err := cmd.Output()
+// ... decode output as PluginResponse
+```
+
+**Follow-up Needed:**
+- [ ] Implement a sample Python or Go plugin to demonstrate the protocol
+- [ ] Add support for long-running stream-based plugins (sidecars) for real-time audio processing
+- [ ] Implement resource limits (timeouts are currently fixed at 60s)
+- [ ] Add plugin-specific configuration storage
+
+**Notes:** Interaction logs are currently kept in memory (last 100 entries). This is sufficient for live debugging via the web UI but may need persistent storage later if plugin auditing becomes a requirement.
+
+---
+
 ### 2026-01-02 - Custom Wake Word Integration
 
 **Context:** The default Porcupine wake word ("Porcupine") wasn't ideal for the TV companion use case. Needed a custom wake word that matches the product name "R2T4".

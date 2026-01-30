@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="en">
+
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -76,8 +77,15 @@
         }
 
         @keyframes pulse {
-            0%, 100% { opacity: 1; }
-            50% { opacity: 0.5; }
+
+            0%,
+            100% {
+                opacity: 1;
+            }
+
+            50% {
+                opacity: 0.5;
+            }
         }
 
         .stats-grid {
@@ -317,7 +325,9 @@
         }
 
         @keyframes spin {
-            to { transform: rotate(360deg); }
+            to {
+                transform: rotate(360deg);
+            }
         }
 
         .modal {
@@ -369,8 +379,89 @@
             cursor: pointer;
             font-size: 1.25rem;
         }
+
+        .plugin-card {
+            background: var(--bg-tertiary);
+            border-radius: 8px;
+            padding: 16px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 1px solid transparent;
+        }
+
+        .plugin-card.disabled {
+            opacity: 0.6;
+        }
+
+        .plugin-card.error {
+            border-color: var(--danger);
+        }
+
+        .plugin-meta h3 {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .plugin-badge {
+            font-size: 0.7rem;
+            padding: 2px 6px;
+            border-radius: 4px;
+            background: var(--bg-primary);
+            color: var(--text-secondary);
+            border: 1px solid var(--border);
+        }
+
+        .plugin-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .plugin-logs {
+            background: #000;
+            color: #0f0;
+            font-family: monospace;
+            padding: 12px;
+            border-radius: 8px;
+            height: 300px;
+            overflow-y: auto;
+            font-size: 0.8rem;
+            white-space: pre-wrap;
+            border: 1px solid var(--border);
+        }
+
+        .log-entry {
+            margin-bottom: 4px;
+            border-bottom: 1px solid #333;
+            padding-bottom: 4px;
+        }
+
+        .log-time {
+            color: #888;
+            margin-right: 8px;
+        }
+
+        .log-type {
+            font-weight: bold;
+            margin-right: 8px;
+            color: #fff;
+        }
+
+        .log-content {
+            color: #ccc;
+        }
+
+        .log-error {
+            color: #ff5555;
+        }
+
+        .log-success {
+            color: #55ff55;
+        }
     </style>
 </head>
+
 <body>
     <div class="container">
         <header>
@@ -410,7 +501,9 @@
                 <button class="btn btn-secondary" onclick="refreshDevices()">Refresh</button>
             </div>
             <div class="device-list" id="device-list">
-                <div class="loading"><div class="spinner"></div></div>
+                <div class="loading">
+                    <div class="spinner"></div>
+                </div>
             </div>
         </div>
 
@@ -428,7 +521,42 @@
                 <button class="tab" data-type="image" onclick="filterFiles('image', this)">Images</button>
             </div>
             <div class="file-grid" id="file-grid">
-                <div class="loading"><div class="spinner"></div></div>
+                <div class="loading">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="section">
+            <div class="section-header">
+                <h2>🔌 Plugins</h2>
+                <button class="btn btn-primary" onclick="openRegisterModal()">Register Plugin</button>
+            </div>
+
+            <div class="stats-grid"
+                style="margin-bottom: 24px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));">
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-plugins-total">-</div>
+                    <div class="stat-label">Total Plugins</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value" id="stat-plugins-active">-</div>
+                    <div class="stat-label">Active</div>
+                </div>
+            </div>
+
+            <div class="device-list" id="plugin-list">
+                <div class="loading">
+                    <div class="spinner"></div>
+                </div>
+            </div>
+
+            <h3 style="margin-top: 24px; margin-bottom: 12px; font-size: 1rem; color: var(--text-secondary);">Recent
+                Interactions</h3>
+            <div class="plugin-logs" id="plugin-logs">
+                <div class="loading">
+                    <div class="spinner"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -436,6 +564,25 @@
     <div class="modal" id="file-modal">
         <button class="modal-close" onclick="closeModal()">×</button>
         <div class="modal-content" id="modal-content"></div>
+    </div>
+
+    <div class="modal" id="register-modal">
+        <button class="modal-close" onclick="closeRegisterModal()">×</button>
+        <div class="modal-content" style="width: 500px">
+            <h2>Register Plugin</h2>
+            <p style="color: var(--text-secondary); margin-bottom: 16px;">
+                Enter the absolute path to the plugin executable.
+                The server must have execute permissions.
+            </p>
+            <div style="display: flex; gap: 8px; margin-bottom: 16px;">
+                <input type="text" id="plugin-path" placeholder="/path/to/plugin"
+                    style="flex: 1; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-primary); color: var(--text-primary);">
+            </div>
+            <div style="display: flex; justify-content: flex-end; gap: 8px;">
+                <button class="btn btn-secondary" onclick="closeRegisterModal()">Cancel</button>
+                <button class="btn btn-primary" onclick="registerPlugin()">Register</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -476,7 +623,7 @@
         async function loadHealth() {
             try {
                 const data = await fetchAPI('/api/health');
-                document.getElementById('server-status').textContent = 
+                document.getElementById('server-status').textContent =
                     `${data.status} | v${data.version} | Up ${Math.floor(data.uptimeSeconds / 60)}m`;
             } catch (e) {
                 document.getElementById('server-status').textContent = 'Disconnected';
@@ -486,7 +633,7 @@
         async function refreshDevices() {
             const list = document.getElementById('device-list');
             list.innerHTML = '<div class="loading"><div class="spinner"></div></div>';
-            
+
             try {
                 const data = await fetchAPI('/api/devices');
                 if (!data.devices || data.devices.length === 0) {
@@ -538,7 +685,7 @@
                 if (currentFileType === 'image') type = '&fileType=2';
 
                 const data = await fetchAPI(`/api/files?deviceId=${currentDevice}${type}&limit=100`);
-                
+
                 if (!data.files || data.files.length === 0) {
                     grid.innerHTML = '<div class="empty-state"><p>No files found</p></div>';
                     return;
@@ -548,7 +695,7 @@
                     const isImage = f.fileType === 2;
                     const isAudio = f.fileType === 1;
                     const url = `/api/file/${currentDevice}/${f.fileId}`;
-                    
+
                     return `
                         <div class="file-card" onclick="openFile('${url}', ${isImage}, ${isAudio})">
                             <div class="file-preview">
@@ -577,7 +724,7 @@
         function openFile(url, isImage, isAudio) {
             const modal = document.getElementById('file-modal');
             const content = document.getElementById('modal-content');
-            
+
             if (isImage) {
                 content.innerHTML = `<img src="${url}" alt="">`;
             } else if (isAudio) {
@@ -585,7 +732,7 @@
             } else {
                 content.innerHTML = `<a href="${url}" download>Download</a>`;
             }
-            
+
             modal.classList.add('active');
         }
 
@@ -617,9 +764,153 @@
         loadStats();
         refreshDevices();
 
+        // Plugin functions
+        async function refreshPlugins() {
+            const list = document.getElementById('plugin-list');
+            try {
+                const data = await fetchAPI('/api/plugins');
+                const plugins = data || []; // Endpoint returns array directly
+
+                document.getElementById('stat-plugins-total').textContent = plugins.length;
+                document.getElementById('stat-plugins-active').textContent = plugins.filter(p => p.status === 1).length;
+
+                if (plugins.length === 0) {
+                    list.innerHTML = '<div class="empty-state"><p>No plugins registered</p></div>';
+                    return;
+                }
+
+                list.innerHTML = plugins.map(p => {
+                    const statusClass = p.status === 2 ? 'disabled' : (p.status === 3 ? 'error' : 'active');
+                    const statusText = p.status === 2 ? '(Disabled)' : (p.status === 3 ? '(Error)' : '');
+
+                    return `
+                    <div class="plugin-card ${statusClass}">
+                        <div class="plugin-meta">
+                            <h3>
+                                ${p.name} <span style="font-weight: normal; font-size: 0.8em; color: var(--text-secondary)">v${p.version}</span>
+                                ${statusText ? `<span style="font-size: 0.8em; color: var(--text-secondary)">${statusText}</span>` : ''}
+                            </h3>
+                            <p>${p.description || 'No description'}</p>
+                            <div style="margin-top: 8px; display: flex; gap: 4px;">
+                                <span class="plugin-badge">${p.path}</span>
+                                ${p.capabilities && p.capabilities.map(c => `<span class="plugin-badge">${c}</span>`).join('') || ''}
+                            </div>
+                        </div>
+                        <div class="plugin-actions">
+                             <button class="btn btn-secondary" onclick="testPlugin('${p.id}')">Test</button>
+                             ${p.status === 2
+                            ? `<button class="btn btn-primary" onclick="togglePlugin('${p.id}', 'enable')">Enable</button>`
+                            : `<button class="btn btn-secondary" onclick="togglePlugin('${p.id}', 'disable')">Disable</button>`
+                        }
+                             <button class="btn btn-danger" onclick="deletePlugin('${p.id}')">Delete</button>
+                        </div>
+                    </div>
+                    `;
+                }).join('');
+
+            } catch (e) {
+                console.error("Failed to load plugins", e);
+                list.innerHTML = '<div class="empty-state"><p>Failed to load plugins</p></div>';
+            }
+        }
+
+        async function refreshLogs() {
+            const container = document.getElementById('plugin-logs');
+            try {
+                const data = await fetchAPI('/api/plugins/logs');
+                const logs = data.logs || [];
+
+                if (logs.length === 0) {
+                    container.innerHTML = '<div style="padding: 20px; text-align: center; color: #666;">No logs yet</div>';
+                    return;
+                }
+
+                container.innerHTML = logs.map(l => {
+                    const typeColor = l.success ? 'log-success' : 'log-error';
+                    return `
+                    <div class="log-entry">
+                        <span class="log-time">${new Date(l.timestamp).toLocaleTimeString()}</span>
+                        [<span class="log-type" style="color: ${l.pluginId ? '#aaa' : '#fff'}">${l.pluginId || 'system'}</span>]
+                        <span class="log-type">${l.type}</span>
+                        <span class="${typeColor}">${l.success ? 'OK' : 'ERR'}</span>
+                        <span style="color: #666; font-size: 0.8em;">(${l.durationMs}ms)</span>
+                        <div class="log-content">${l.content}</div>
+                    </div>
+                    `;
+                }).join('');
+            } catch (e) {
+                container.innerHTML = 'Failed to load logs';
+            }
+        }
+
+        function openRegisterModal() {
+            document.getElementById('register-modal').classList.add('active');
+        }
+
+        function closeRegisterModal() {
+            document.getElementById('register-modal').classList.remove('active');
+        }
+
+        async function registerPlugin() {
+            const path = document.getElementById('plugin-path').value;
+            if (!path) return;
+
+            try {
+                const resp = await fetch('/api/plugins', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path })
+                });
+
+                if (!resp.ok) {
+                    const err = await resp.text();
+                    alert('Failed to register: ' + err);
+                    return;
+                }
+
+                closeRegisterModal();
+                refreshPlugins();
+                refreshLogs();
+            } catch (e) {
+                alert('Error: ' + e.message);
+            }
+        }
+
+        async function togglePlugin(id, action) {
+            try {
+                await fetch(`/api/plugin/${id}/${action}`, { method: 'POST' });
+                refreshPlugins();
+                refreshLogs();
+            } catch (e) {
+                alert('Failed to ' + action + ' plugin');
+            }
+        }
+
+        async function deletePlugin(id) {
+            if (!confirm('This will unregister the plugin. Continue?')) return;
+            await togglePlugin(id, 'delete');
+        }
+
+        async function testPlugin(id) {
+            try {
+                const resp = await fetch(`/api/plugin/${id}/test`, { method: 'POST' });
+                const data = await resp.json();
+                alert(data.message + (data.error ? '\n' + data.error : ''));
+                refreshLogs();
+            } catch (e) {
+                alert('Test failed');
+            }
+        }
+
         // Refresh periodically
         setInterval(loadHealth, 30000);
         setInterval(loadStats, 60000);
+        setInterval(refreshPlugins, 10000);
+        setInterval(refreshLogs, 5000);
+
+        refreshPlugins();
+        refreshLogs();
     </script>
 </body>
+
 </html>

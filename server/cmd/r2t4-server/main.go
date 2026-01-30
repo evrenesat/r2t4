@@ -22,6 +22,7 @@ import (
 	"github.com/evren/r2t4/server/gen/r2t4/v1/r2t4v1connect"
 	"github.com/evren/r2t4/server/internal/config"
 	"github.com/evren/r2t4/server/internal/handler"
+	"github.com/evren/r2t4/server/internal/plugin"
 	"github.com/evren/r2t4/server/internal/storage"
 	"github.com/evren/r2t4/server/internal/web"
 	"golang.org/x/net/http2"
@@ -56,6 +57,17 @@ func main() {
 	promptHandler := handler.NewPromptHandler(store)
 	adminHandler := handler.NewAdminHandler(store, Version)
 
+	// Initialize plugin system
+	pluginLogger, err := plugin.NewLogger(cfg.DataDir)
+	if err != nil {
+		log.Printf("Warning: failed to create plugin logger: %v", err)
+	}
+	pluginManager, err := plugin.NewManager(cfg.DataDir, pluginLogger)
+	if err != nil {
+		log.Printf("Warning: failed to initialize plugin manager: %v", err)
+	}
+	pluginHandler := handler.NewPluginHandler(pluginManager)
+
 	// Create Connect interceptors for logging
 	interceptors := connect.WithInterceptors(loggingInterceptor())
 
@@ -66,10 +78,12 @@ func main() {
 	uploadPath, uploadSvc := r2t4v1connect.NewUploadServiceHandler(uploadHandler, interceptors)
 	promptPath, promptSvc := r2t4v1connect.NewPromptServiceHandler(promptHandler, interceptors)
 	adminPath, adminSvc := r2t4v1connect.NewAdminServiceHandler(adminHandler, interceptors)
+	pluginPath, pluginSvc := r2t4v1connect.NewPluginServiceHandler(pluginHandler, interceptors)
 
 	mux.Handle(uploadPath, uploadSvc)
 	mux.Handle(promptPath, promptSvc)
 	mux.Handle(adminPath, adminSvc)
+	mux.Handle(pluginPath, pluginSvc)
 
 	// Register REST-like API endpoints for web UI
 	mux.HandleFunc("/api/health", makeJSONHandler(func(r *http.Request) (interface{}, error) {
@@ -211,6 +225,73 @@ func main() {
 			"bytesFreed":   bytes,
 		})
 	})
+
+	// Plugin API endpoints
+	if pluginManager != nil { // Only register if manager initialized successfully
+		mux.HandleFunc("/api/plugins", makeJSONHandler(func(r *http.Request) (interface{}, error) {
+			if r.Method == http.MethodPost {
+				// Register plugin
+				var req struct {
+					Path string `json:"path"`
+				}
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					return nil, fmt.Errorf("invalid request body")
+				}
+				plugin, err := pluginManager.RegisterPlugin(req.Path)
+				if err != nil {
+					return nil, err
+				}
+				return plugin, nil
+			}
+			// List plugins
+			return pluginManager.ListPlugins(), nil
+		}))
+
+		mux.HandleFunc("/api/plugins/logs", makeJSONHandler(func(r *http.Request) (interface{}, error) {
+			limit := 100
+			logs, err := pluginLogger.GetLogs(limit)
+			if err != nil {
+				return nil, err
+			}
+			return map[string]interface{}{"logs": logs}, nil
+		}))
+
+		// Individual plugin actions
+		// /api/plugins/{id}/{action} where action is: delete, enable, disable, test, execute
+		mux.HandleFunc("/api/plugin/", makeJSONHandler(func(r *http.Request) (interface{}, error) {
+			// Path: /api/plugin/{id}/{action}
+			parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/api/plugin/"), "/")
+			if len(parts) < 2 {
+				return nil, fmt.Errorf("invalid path")
+			}
+			id := parts[0]
+			action := parts[1]
+
+			if r.Method != http.MethodPost {
+				return nil, fmt.Errorf("method not allowed")
+			}
+
+			switch action {
+			case "delete":
+				return map[string]bool{"success": true}, pluginManager.UnregisterPlugin(id)
+			case "enable":
+				p, err := pluginManager.SetPluginStatus(id, true)
+				return p, err
+			case "disable":
+				p, err := pluginManager.SetPluginStatus(id, false)
+				return p, err
+			case "test":
+				success, msg, latency, err := pluginManager.TestPlugin(id)
+				return map[string]interface{}{
+					"success":   success,
+					"message":   msg,
+					"latencyMs": latency,
+					"error":     err,
+				}, nil
+			}
+			return nil, fmt.Errorf("unknown action: %s", action)
+		}))
+	}
 
 	// Serve embedded web UI
 	webFS, err := fs.Sub(web.GetFS(), ".")

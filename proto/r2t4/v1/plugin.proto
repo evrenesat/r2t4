@@ -1,0 +1,93 @@
+// R2T4 Plugin Service
+// Provides management of external plugins.
+
+syntax = "proto3";
+
+package r2t4.v1;
+
+option go_package = "github.com/evren/r2t4/server/gen/r2t4/v1;r2t4v1";
+
+// PluginService manages external plugins.
+service PluginService {
+  // List all registered plugins
+  rpc ListPlugins(ListPluginsRequest) returns (ListPluginsResponse);
+
+  // Register a new plugin by path
+  rpc RegisterPlugin(RegisterPluginRequest) returns (RegisterPluginResponse);
+
+  // Unregister a plugin
+  rpc UnregisterPlugin(UnregisterPluginRequest) returns (UnregisterPluginResponse);
+
+  // Enable/Disable a plugin
+  rpc SetPluginStatus(SetPluginStatusRequest) returns (SetPluginStatusResponse);
+
+  // Test a plugin (runs handshake)
+  rpc TestPlugin(TestPluginRequest) returns (TestPluginResponse);
+}
+
+enum PluginType {
+  PLUGIN_TYPE_UNSPECIFIED = 0;
+  PLUGIN_TYPE_SUBTITLE_PROVIDER = 1;
+  PLUGIN_TYPE_WEB_SEARCH = 2;
+  PLUGIN_TYPE_IMDB_SCORE = 3;
+}
+
+enum PluginStatus {
+  PLUGIN_STATUS_UNSPECIFIED = 0;
+  PLUGIN_STATUS_ACTIVE = 1;
+  PLUGIN_STATUS_DISABLED = 2;
+  PLUGIN_STATUS_ERROR = 3;
+}
+
+message Plugin {
+  string id = 1;
+  string name = 2;
+  string version = 3;
+  PluginType type = 4;
+  PluginStatus status = 5;
+  string path = 6;
+  repeated string capabilities = 7;
+  string error_message = 8;
+  string description = 9;
+}
+
+message ListPluginsRequest {}
+
+message ListPluginsResponse {
+  repeated Plugin plugins = 1;
+}
+
+message RegisterPluginRequest {
+  string path = 1;
+}
+
+message RegisterPluginResponse {
+  Plugin plugin = 1;
+}
+
+message UnregisterPluginRequest {
+  string plugin_id = 1;
+}
+
+message UnregisterPluginResponse {
+  bool success = 1;
+}
+
+message SetPluginStatusRequest {
+  string plugin_id = 1;
+  bool enabled = 2; // true = ACTIVE, false = DISABLED
+}
+
+message SetPluginStatusResponse {
+  Plugin plugin = 1;
+}
+
+message TestPluginRequest {
+  string plugin_id = 1;
+}
+
+message TestPluginResponse {
+  bool success = 1;
+  string message = 2;
+  int64 latency_ms = 3;
+}
