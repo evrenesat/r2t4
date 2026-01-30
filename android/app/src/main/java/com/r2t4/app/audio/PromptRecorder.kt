@@ -99,7 +99,8 @@ class PromptRecorder {
         }
 
         this.timeoutSeconds = timeoutSeconds
-        promptId = UUID.randomUUID().toString()
+        // Use time-ordered ID (timestamp-uuid) for easier debugging/sorting
+        promptId = "${System.currentTimeMillis()}-${UUID.randomUUID()}"
         startTimeMs = System.currentTimeMillis()
         lastSpeechTimeMs = startTimeMs
         isRecording = true
