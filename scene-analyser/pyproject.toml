@@ -1,0 +1,16 @@
+[project]
+name = "scene-analyser"
+version = "0.1.0"
+description = "Local movie scene extraction and inference pipeline."
+requires-python = ">=3.14"
+dependencies = [
+    "json-repair>=0.58.4",
+    "pillow>=12.1.1",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+package = false
