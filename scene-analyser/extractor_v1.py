@@ -6,6 +6,7 @@ import re
 import subprocess
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import Any
 
 from PIL import Image
@@ -17,6 +18,7 @@ from frame_selector import (
     derive_thresholds,
     select_chunk_frames,
 )
+from subtitle_ingestion import SUBTITLES_DIRNAME, export_embedded_subtitles
 
 VIDEO_PATH = "/Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv"
 OUTPUT_DIR = "output"
@@ -69,6 +71,7 @@ GRID_COLS = 2
 GRID_ROWS = 2
 MAX_EDGE = 512
 MAX_WORKERS = 4
+GRIDS_DIRNAME = "grids"
 
 
 def runtime_config() -> dict[str, Any]:
@@ -280,11 +283,16 @@ def process_video() -> None:
     ensure_output_dir(OUTPUT_DIR)
     config = runtime_config()
     run_output_dir = make_run_output_dir(OUTPUT_DIR, config["PRESET"])
+    grids_output_dir = os.path.join(run_output_dir, GRIDS_DIRNAME)
+    subtitles_output_dir = os.path.join(run_output_dir, SUBTITLES_DIRNAME)
+    ensure_output_dir(grids_output_dir)
+    ensure_output_dir(subtitles_output_dir)
     print(f"Writing run outputs to {run_output_dir}")
 
     phase_timings: dict[str, float] = {
         "duration_lookup": 0.0,
         "scene_cut_probe": 0.0,
+        "subtitle_export": 0.0,
         "low_res_analysis": 0.0,
         "chunk_building": 0.0,
         "full_res_extraction": 0.0,
@@ -299,6 +307,12 @@ def process_video() -> None:
     scene_cuts = get_scene_changes(VIDEO_PATH, OUTPUT_DIR, config["SCENE_THRESHOLD"])
     cut_regions = merge_scene_cuts(scene_cuts, config["CUT_MERGE_SEC"])
     phase_timings["scene_cut_probe"] = time.perf_counter() - started
+
+    started = time.perf_counter()
+    exported_subtitles = export_embedded_subtitles(
+        Path(VIDEO_PATH), Path(subtitles_output_dir)
+    )
+    phase_timings["subtitle_export"] = time.perf_counter() - started
 
     started = time.perf_counter()
     analyzed_frames = analyze_video_lowres(
@@ -340,7 +354,7 @@ def process_video() -> None:
             safe_start = safe_timestamp_label(chunk.start)
             safe_end = safe_timestamp_label(chunk.end)
             grid_filename = f"scene{chunk.chunk_index}_chunk1_{safe_start}s_to_{safe_end}s.jpg"
-            grid_filepath = os.path.join(run_output_dir, grid_filename)
+            grid_filepath = os.path.join(grids_output_dir, grid_filename)
             temp_images: list[str] = []
 
             started = time.perf_counter()
@@ -396,6 +410,10 @@ def process_video() -> None:
             "phase_timings_sec": phase_timings,
             "preset": config["PRESET"],
             "run_output_dir": run_output_dir,
+            "grids_output_dir": grids_output_dir,
+            "subtitles_output_dir": subtitles_output_dir,
+            "exported_subtitle_count": len(exported_subtitles),
+            "exported_subtitles": [subtitle.to_dict() for subtitle in exported_subtitles],
             "merged_cut_region_count": len(cut_regions),
         }
     )

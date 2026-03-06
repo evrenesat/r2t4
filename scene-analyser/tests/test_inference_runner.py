@@ -48,9 +48,11 @@ class InferenceRunnerTests(unittest.TestCase):
             root = Path(temp_dir)
             grid_run_dir = root / "grid_run"
             grid_run_dir.mkdir()
-            image_path = grid_run_dir / "scene1.jpg"
+            grids_dir = grid_run_dir / "grids"
+            grids_dir.mkdir()
+            image_path = grids_dir / "scene1.jpg"
             image_path.write_bytes(b"fake image")
-            image_path_2 = grid_run_dir / "scene2.jpg"
+            image_path_2 = grids_dir / "scene2.jpg"
             image_path_2.write_bytes(b"fake image 2")
             manifest = [
                 {"grid_filename": "scene1.jpg", "chunk_start": 0.0, "chunk_end": 4.0},
@@ -63,7 +65,7 @@ class InferenceRunnerTests(unittest.TestCase):
 
             config = RunConfig(
                 grid_run_dir=grid_run_dir,
-                video_path=Path("/tmp/movie.mkv"),
+                video_path=None,
                 strategy="image_only",
                 model="model-id",
                 chat_completions_url="http://localhost:1234/v1/chat/completions",
@@ -98,7 +100,9 @@ class InferenceRunnerTests(unittest.TestCase):
             root = Path(temp_dir)
             grid_run_dir = root / "grid_run"
             grid_run_dir.mkdir()
-            image_path = grid_run_dir / "scene1.jpg"
+            grids_dir = grid_run_dir / "grids"
+            grids_dir.mkdir()
+            image_path = grids_dir / "scene1.jpg"
             image_path.write_bytes(b"fake image")
             (grid_run_dir / "manifest.jsonl").write_text(
                 json.dumps({"grid_filename": "scene1.jpg", "chunk_start": 0.0, "chunk_end": 4.0}),
@@ -106,7 +110,7 @@ class InferenceRunnerTests(unittest.TestCase):
             )
             config = RunConfig(
                 grid_run_dir=grid_run_dir,
-                video_path=Path("/tmp/movie.mkv"),
+                video_path=None,
                 strategy="image_with_raw_subtitles",
                 model="model-id",
                 chat_completions_url="http://localhost:1234/v1/chat/completions",
@@ -144,8 +148,10 @@ class InferenceRunnerTests(unittest.TestCase):
             root = Path(temp_dir)
             grid_run_dir = root / "grid_run"
             grid_run_dir.mkdir()
-            (grid_run_dir / "scene1.jpg").write_bytes(b"fake image")
-            (grid_run_dir / "scene2.jpg").write_bytes(b"fake image")
+            grids_dir = grid_run_dir / "grids"
+            grids_dir.mkdir()
+            (grids_dir / "scene1.jpg").write_bytes(b"fake image")
+            (grids_dir / "scene2.jpg").write_bytes(b"fake image")
             (grid_run_dir / "manifest.jsonl").write_text(
                 "\n".join(
                     [
@@ -157,7 +163,7 @@ class InferenceRunnerTests(unittest.TestCase):
             )
             config = RunConfig(
                 grid_run_dir=grid_run_dir,
-                video_path=Path("/tmp/movie.mkv"),
+                video_path=None,
                 strategy="image_only",
                 model="model-id",
                 chat_completions_url="http://localhost:1234/v1/chat/completions",
@@ -178,6 +184,66 @@ class InferenceRunnerTests(unittest.TestCase):
             ]
             self.assertEqual(len(rows), 1)
             self.assertEqual(rows[0]["grid_filename"], "scene1.jpg")
+
+    def test_run_inference_uses_extracted_run_subtitles_without_video_path(self) -> None:
+        with tempfile.TemporaryDirectory(dir="temp") as temp_dir:
+            root = Path(temp_dir)
+            grid_run_dir = root / "grid_run"
+            grid_run_dir.mkdir()
+            grids_dir = grid_run_dir / "grids"
+            grids_dir.mkdir()
+            subtitles_dir = grid_run_dir / "subtitles"
+            subtitles_dir.mkdir()
+            (grids_dir / "scene1.jpg").write_bytes(b"fake image")
+            (grid_run_dir / "manifest.jsonl").write_text(
+                json.dumps({"grid_filename": "scene1.jpg", "chunk_start": 0.0, "chunk_end": 4.0}),
+                encoding="utf-8",
+            )
+            (subtitles_dir / "stream05_eng.ass").write_text(
+                "[Events]\n"
+                "Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text\n"
+                "Dialogue: 0,0:00:01.00,0:00:03.00,Default,,0,0,0,,Hello there\n",
+                encoding="utf-8",
+            )
+            (subtitles_dir / "catalog.json").write_text(
+                json.dumps(
+                    [
+                        {
+                            "index": 5,
+                            "format_name": "ass",
+                            "identifier": str(subtitles_dir / "stream05_eng.ass"),
+                            "language": "eng",
+                            "title": "English",
+                        }
+                    ]
+                ),
+                encoding="utf-8",
+            )
+
+            config = RunConfig(
+                grid_run_dir=grid_run_dir,
+                video_path=None,
+                strategy="image_with_raw_subtitles",
+                model="model-id",
+                chat_completions_url="http://localhost:1234/v1/chat/completions",
+                subtitle_path=None,
+                subtitle_language="eng",
+                subtitle_stream_index=None,
+                limit=None,
+                max_chunk_end_seconds=None,
+                output_name="test",
+            )
+
+            with patch("inference_runner.OpenAICompatibleClient", FakeClient):
+                run_dir = asyncio.run(run_inference(config))
+
+            rows = [
+                json.loads(line)
+                for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            metadata = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+            self.assertEqual(rows[0]["subtitle_context"]["event_count"], 1)
+            self.assertEqual(metadata["subtitle_source"]["kind"], "extracted")
 
 
 if __name__ == "__main__":

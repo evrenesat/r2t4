@@ -36,9 +36,12 @@ Each extractor run writes to a fresh subdirectory such as:
 
 That run directory contains:
 
-- `scene*.jpg`
+- `grids/scene*.jpg`
+- `subtitles/`
 - `manifest.jsonl`
 - `diagnostics.json`
+
+The `subtitles/` directory contains every text subtitle stream the extractor could export from the source title, plus a `catalog.json` file used by the inference stage.
 
 The top-level `output/` directory only keeps reusable cache files.
 
@@ -61,6 +64,8 @@ Artifacts:
 
 `run.json` stores the run-level defaults and shared prompt metadata so `results.jsonl` can stay focused on per-grid outputs and timings.
 
+Grid images are resolved from `<grid_run_dir>/grids/` using the filenames stored in `manifest.jsonl`.
+
 ### Supported v1 strategies
 
 - `image_only`
@@ -71,9 +76,12 @@ Artifacts:
 Resolution order:
 
 1. external subtitle file passed with `--subtitle-path`
-2. embedded subtitle stream from the source video
+2. extracted subtitle files in `<grid_run_dir>/subtitles/`
+3. embedded subtitle stream from the source video if `--video-path` is provided
 
-Embedded subtitles currently support text subtitle codecs that can be normalized as ASS, SRT, or VTT. The current sample video exposes an embedded English ASS stream.
+The default selection policy is: first matching English subtitle, otherwise the first available subtitle. `--subtitle-language` and `--subtitle-stream-index` override that behavior.
+
+Embedded subtitles currently support text subtitle codecs that can be normalized as ASS, SRT, or VTT. Extracted run subtitles are preferred so inference does not normally need the original movie file.
 
 ### Default local endpoint
 
@@ -87,7 +95,6 @@ Image only:
 ```bash
 uv run python inference_runner.py \
   --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
-  --video-path /Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv \
   --strategy image_only
 ```
 
@@ -96,9 +103,10 @@ Image plus raw subtitles:
 ```bash
 uv run python inference_runner.py \
   --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
-  --video-path /Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv \
   --strategy image_with_raw_subtitles
 ```
+
+If a run does not have extracted subtitles and you want embedded-subtitle fallback, add `--video-path /path/to/movie.mkv`.
 
 Useful flags:
 
@@ -119,7 +127,7 @@ Start it in the background:
 
 ```bash
 mkdir -p temp
-nohup uv run python batch_first_ten_minutes.py > temp/batch_first_ten_minutes.log 2>&1 &
+nohup uv run python batch_first_ten_minutes.py --model qwen3.5-35b-a3b@iq4_xs > temp/batch_first_ten_minutes.log 2>&1 &
 ```
 
 ## Verification

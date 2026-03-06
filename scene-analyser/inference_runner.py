@@ -41,7 +41,7 @@ DEFAULT_MAX_CHUNK_END_SECONDS: float | None = None
 @dataclass(frozen=True)
 class RunConfig:
     grid_run_dir: Path
-    video_path: Path
+    video_path: Path | None
     strategy: str
     model: str
     chat_completions_url: str
@@ -58,7 +58,7 @@ def parse_args() -> RunConfig:
         description="Run local scene analysis over an extracted grid run."
     )
     parser.add_argument("--grid-run-dir", required=True)
-    parser.add_argument("--video-path", required=True)
+    parser.add_argument("--video-path")
     parser.add_argument(
         "--strategy", required=True, choices=["image_only", "image_with_raw_subtitles"]
     )
@@ -75,7 +75,7 @@ def parse_args() -> RunConfig:
     args = parser.parse_args()
     return RunConfig(
         grid_run_dir=Path(args.grid_run_dir),
-        video_path=Path(args.video_path),
+        video_path=Path(args.video_path) if args.video_path else None,
         strategy=args.strategy,
         model=args.model,
         chat_completions_url=args.chat_completions_url,
@@ -183,7 +183,7 @@ def build_run_metadata(
 ) -> dict[str, Any]:
     return {
         "grid_run_dir": str(config.grid_run_dir),
-        "video_path": str(config.video_path),
+        "video_path": str(config.video_path) if config.video_path is not None else None,
         "strategy": config.strategy,
         "model": config.model,
         "chat_completions_url": config.chat_completions_url,
@@ -237,6 +237,7 @@ async def run_inference(config: RunConfig) -> Path:
         subtitle_source, subtitle_events = load_subtitles(
             video_path=config.video_path,
             subtitle_path=config.subtitle_path,
+            grid_run_dir=config.grid_run_dir,
             subtitle_language=config.subtitle_language,
             subtitle_stream_index=config.subtitle_stream_index,
         )

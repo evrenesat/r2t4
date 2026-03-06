@@ -34,6 +34,8 @@ PAREN_CUE_PATTERN = re.compile(r"\((?:applause|laughs?|music|sighs?|gasps?|groan
                                re.IGNORECASE)
 LEADING_MUSIC_PATTERN = re.compile(r"^[♪♩♫]+\s*")
 WHITESPACE_PATTERN = re.compile(r"\s+")
+SUBTITLES_DIRNAME = "subtitles"
+SUBTITLE_CATALOG_FILENAME = "catalog.json"
 
 
 @dataclass(frozen=True)
@@ -81,14 +83,53 @@ class SubtitleAccumulator:
 
 
 def load_subtitles(
-    video_path: Path,
+    video_path: Path | None = None,
     subtitle_path: Path | None = None,
+    grid_run_dir: Path | None = None,
     subtitle_language: str = "eng",
     subtitle_stream_index: int | None = None,
 ) -> tuple[SubtitleSource, list[SubtitleEvent]]:
     if subtitle_path is not None:
         return load_external_subtitles(subtitle_path)
-    return load_embedded_subtitles(video_path, subtitle_language, subtitle_stream_index)
+    if grid_run_dir is not None:
+        try:
+            return load_extracted_subtitles(
+                grid_run_dir, subtitle_language, subtitle_stream_index
+            )
+        except ValueError:
+            if video_path is None:
+                raise
+    if video_path is not None:
+        return load_embedded_subtitles(video_path, subtitle_language, subtitle_stream_index)
+    raise ValueError(
+        "No subtitles available. Provide --subtitle-path or run inference against a grid run "
+        "that includes extracted subtitles."
+    )
+
+
+def load_extracted_subtitles(
+    grid_run_dir: Path,
+    subtitle_language: str,
+    subtitle_stream_index: int | None,
+) -> tuple[SubtitleSource, list[SubtitleEvent]]:
+    entries = discover_extracted_subtitle_entries(grid_run_dir)
+    if not entries:
+        raise ValueError(f"No extracted subtitle files found in {grid_run_dir}.")
+    stream = choose_subtitle_stream(entries, subtitle_language, subtitle_stream_index)
+    subtitle_path = Path(str(stream["identifier"]))
+    raw_text = subtitle_path.read_text(encoding="utf-8-sig")
+    format_name = normalize_format_name(str(stream["format_name"]))
+    events = parse_subtitle_text(raw_text, format_name)
+    if not events:
+        raise ValueError(f"No subtitle events found in extracted subtitle {subtitle_path}.")
+    return SubtitleSource(
+        kind="extracted",
+        format_name=format_name,
+        identifier=str(subtitle_path),
+        language=stream.get("language"),
+        title=stream.get("title"),
+        stream_index=int(stream["index"]) if stream.get("index") is not None else None,
+    ), events
 
 
 def load_external_subtitles(path: Path) -> tuple[SubtitleSource, list[SubtitleEvent]]:
@@ -128,6 +169,77 @@ def load_embedded_subtitles(
         title=stream.get("title"),
         stream_index=stream["index"],
     ), events
+
+
+def export_embedded_subtitles(video_path: Path, output_dir: Path) -> list[SubtitleSource]:
+    streams = discover_embedded_subtitle_streams(video_path)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    exported_sources: list[SubtitleSource] = []
+    catalog_entries: list[dict[str, str | int | None]] = []
+
+    for stream in streams:
+        try:
+            raw_text = extract_embedded_subtitle_text(
+                video_path, int(stream["index"]), str(stream["codec_name"])
+            )
+            format_name = normalize_format_name(str(stream["codec_name"]))
+            output_path = output_dir / build_subtitle_filename(stream, format_name)
+            output_path.write_text(raw_text, encoding="utf-8")
+        except (ValueError, subprocess.CalledProcessError) as error:
+            LOGGER.warning(
+                "Skipping subtitle stream %s while exporting subtitles: %s",
+                stream.get("index"),
+                error,
+            )
+            continue
+
+        source = SubtitleSource(
+            kind="extracted",
+            format_name=format_name,
+            identifier=str(output_path),
+            language=stream.get("language"),
+            title=stream.get("title"),
+            stream_index=int(stream["index"]),
+        )
+        exported_sources.append(source)
+        catalog_entries.append(
+            {
+                "index": stream["index"],
+                "format_name": format_name,
+                "identifier": str(output_path),
+                "language": stream.get("language"),
+                "title": stream.get("title"),
+            }
+        )
+
+    catalog_path = output_dir / SUBTITLE_CATALOG_FILENAME
+    catalog_path.write_text(json.dumps(catalog_entries, indent=2), encoding="utf-8")
+    return exported_sources
+
+
+def discover_extracted_subtitle_entries(
+    grid_run_dir: Path,
+) -> list[dict[str, str | int | None]]:
+    subtitles_dir = grid_run_dir / SUBTITLES_DIRNAME
+    catalog_path = subtitles_dir / SUBTITLE_CATALOG_FILENAME
+    if catalog_path.exists():
+        payload = json.loads(catalog_path.read_text(encoding="utf-8") or "[]")
+        return [coerce_subtitle_entry(entry) for entry in payload]
+
+    entries: list[dict[str, str | int | None]] = []
+    for path in sorted(subtitles_dir.glob("*")):
+        if path.suffix.lower() not in SUBTITLE_TEXT_EXTENSIONS:
+            continue
+        entries.append(
+            {
+                "index": None,
+                "format_name": normalize_format_name(path.suffix.lstrip(".")),
+                "identifier": str(path),
+                "language": None,
+                "title": None,
+            }
+        )
+    return entries
 
 
 def discover_embedded_subtitle_streams(video_path: Path) -> list[dict[str, str | int | None]]:
@@ -176,6 +288,19 @@ def choose_subtitle_stream(
     return streams[0]
 
 
+def coerce_subtitle_entry(
+    entry: dict[str, str | int | None],
+) -> dict[str, str | int | None]:
+    return {
+        "index": entry.get("index"),
+        "codec_name": entry.get("codec_name"),
+        "format_name": entry.get("format_name") or entry.get("codec_name"),
+        "identifier": entry.get("identifier"),
+        "language": entry.get("language"),
+        "title": entry.get("title"),
+    }
+
+
 def extract_embedded_subtitle_text(video_path: Path, stream_index: int, codec_name: str) -> str:
     output_format = subtitle_ffmpeg_format(codec_name)
     cmd = [
@@ -217,6 +342,25 @@ def normalize_format_name(name: str) -> str:
     if lowered in {"webvtt", "vtt"}:
         return "vtt"
     return lowered
+
+
+def build_subtitle_filename(
+    stream: dict[str, str | int | None], format_name: str
+) -> str:
+    parts = [f"stream{int(stream['index']):02d}"]
+    language = stream.get("language")
+    title = stream.get("title")
+    if language:
+        parts.append(slugify_subtitle_part(str(language)))
+    if title:
+        parts.append(slugify_subtitle_part(str(title)))
+    return f"{'_'.join(parts)}.{format_name}"
+
+
+def slugify_subtitle_part(value: str) -> str:
+    cleaned = "".join(character if character.isalnum() else "_" for character in value)
+    cleaned = re.sub(r"_+", "_", cleaned).strip("_")
+    return cleaned or "subtitle"
 
 
 def parse_subtitle_text(raw_text: str, format_name: str) -> list[SubtitleEvent]:

@@ -7,6 +7,7 @@ from typing import Protocol
 
 from subtitle_ingestion import SubtitleAccumulator
 
+GRIDS_DIRNAME = "grids"
 BASE_USER_PROMPT_TEMPLATE = (
     "Analyze the provided movie scene grid as a single chronological scene.\n"
     "Scene timing: {chunk_start:.1f}s to {chunk_end:.1f}s."
@@ -145,7 +146,7 @@ def build_grid_record(grid_run_dir: Path, manifest_row: dict[str, object]) -> Gr
     grid_filename = str(manifest_row["grid_filename"])
     return GridRecord(
         grid_filename=grid_filename,
-        grid_path=str(grid_run_dir / grid_filename),
+        grid_path=str(grid_run_dir / GRIDS_DIRNAME / grid_filename),
         chunk_start=float(manifest_row["chunk_start"]),
         chunk_end=float(manifest_row["chunk_end"]),
     )
