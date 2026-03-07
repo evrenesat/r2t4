@@ -57,26 +57,45 @@ class OpenAICompatibleClient:
         model: str,
         prompt_context: PromptContext,
     ) -> CompletionSuccess | CompletionFailure:
+        return await self.generate_json(
+            model=model,
+            system_prompt=prompt_context.system_prompt,
+            user_text=prompt_context.user_text,
+            image_path=Path(prompt_context.image_path),
+        )
+
+    async def generate_json(
+        self,
+        model: str,
+        system_prompt: str,
+        user_text: str,
+        image_path: Path | None = None,
+    ) -> CompletionSuccess | CompletionFailure:
         retry_count = 0
         while True:
             try:
-                payload = self._build_payload(model, prompt_context)
+                payload = self._build_payload(
+                    model=model,
+                    system_prompt=system_prompt,
+                    user_text=user_text,
+                    image_path=image_path,
+                )
                 response = await asyncio.to_thread(self._post_payload, payload)
                 raw_text = extract_message_text(response)
-            except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
-                return CompletionFailure(
-                    error_type="transport_error",
-                    message=str(error),
-                    raw_text=None,
-                    repaired_json=False,
-                    retry_count=retry_count,
-                )
             except urllib.error.HTTPError as error:
                 body = error.read().decode("utf-8", errors="replace")
                 return CompletionFailure(
                     error_type="http_error",
                     message=f"{error.code} {error.reason}",
                     raw_text=body,
+                    repaired_json=False,
+                    retry_count=retry_count,
+                )
+            except (urllib.error.URLError, TimeoutError, socket.timeout) as error:
+                return CompletionFailure(
+                    error_type="transport_error",
+                    message=str(error),
+                    raw_text=None,
                     repaired_json=False,
                     retry_count=retry_count,
                 )
@@ -100,29 +119,39 @@ class OpenAICompatibleClient:
                 )
             retry_count += 1
 
-    def _build_payload(self, model: str, prompt_context: PromptContext) -> dict[str, object]:
+    def _build_payload(
+        self,
+        model: str,
+        system_prompt: str,
+        user_text: str,
+        image_path: Path | None = None,
+    ) -> dict[str, object]:
+        user_content: list[dict[str, Any]] = [
+            {
+                "type": "text",
+                "text": user_text,
+            }
+        ]
+        if image_path is not None:
+            user_content.append(
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": image_path_to_data_uri(image_path),
+                    },
+                }
+            )
         return {
             "model": model,
             "temperature": DEFAULT_TEMPERATURE,
             "messages": [
                 {
                     "role": "system",
-                    "content": prompt_context.system_prompt,
+                    "content": system_prompt,
                 },
                 {
                     "role": "user",
-                    "content": [
-                        {
-                            "type": "text",
-                            "text": prompt_context.user_text,
-                        },
-                        {
-                            "type": "image_url",
-                            "image_url": {
-                                "url": image_path_to_data_uri(Path(prompt_context.image_path)),
-                            },
-                        },
-                    ],
+                    "content": user_content,
                 },
             ],
         }

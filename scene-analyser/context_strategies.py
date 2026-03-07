@@ -3,8 +3,9 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
+from scene_memory import BoundedSceneMemory
 from subtitle_ingestion import SubtitleAccumulator
 
 GRIDS_DIRNAME = "grids"
@@ -21,6 +22,16 @@ RAW_SUBTITLE_TEMPLATE = (
     "Subtitles:\n{subtitles}"
 )
 RAW_SUBTITLE_PROMPT_LABEL = "image_with_raw_subtitles_v1"
+BOUNDED_MEMORY_TEMPLATE = (
+    "Analyze the provided movie scene grid as a single chronological scene.\n"
+    "Scene timing: {chunk_start:.1f}s to {chunk_end:.1f}s.\n"
+    "Use the image as the primary evidence.\n"
+    "Use the bounded subtitle memory only as supporting narrative context.\n"
+    "Older subtitle summary:\n{older_subtitle_summary}\n\n"
+    "Recent exact subtitles from the last three scene windows:\n{recent_raw_subtitles}\n\n"
+    "Carry-forward state from prior successful scene analyses:\n{carry_forward_state}"
+)
+BOUNDED_MEMORY_PROMPT_LABEL = "image_with_bounded_subtitle_memory_v1"
 
 
 @dataclass(frozen=True)
@@ -44,6 +55,7 @@ class PromptContext:
 @dataclass
 class StrategyState:
     subtitle_accumulator: SubtitleAccumulator | None = None
+    bounded_scene_memory: BoundedSceneMemory | None = None
 
 
 class ContextStrategy(Protocol):
@@ -55,6 +67,14 @@ class ContextStrategy(Protocol):
         state: StrategyState,
         system_prompt: str,
     ) -> PromptContext: ...
+
+    def record_result(
+        self,
+        grid_record: "GridRecord",
+        state: StrategyState,
+        analysis: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+    ) -> None: ...
 
 
 class ImageOnlyStrategy:
@@ -83,6 +103,15 @@ class ImageOnlyStrategy:
                 "text_char_count": 0,
             },
         )
+
+    def record_result(
+        self,
+        grid_record: GridRecord,
+        state: StrategyState,
+        analysis: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+    ) -> None:
+        del grid_record, state, analysis, error
 
 
 class ImageWithRawSubtitlesStrategy:
@@ -115,6 +144,64 @@ class ImageWithRawSubtitlesStrategy:
                 "last_event_end": metadata["last_event_end"],
                 "text_char_count": len(subtitles),
             },
+        )
+
+    def record_result(
+        self,
+        grid_record: GridRecord,
+        state: StrategyState,
+        analysis: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+    ) -> None:
+        del grid_record, state, analysis, error
+
+
+class ImageWithBoundedSubtitleMemoryStrategy:
+    name = "image_with_bounded_subtitle_memory"
+
+    async def build_context(
+        self,
+        grid_record: GridRecord,
+        state: StrategyState,
+        system_prompt: str,
+    ) -> PromptContext:
+        if state.bounded_scene_memory is None:
+            raise ValueError("The bounded subtitle memory strategy requires scene memory.")
+        await asyncio.sleep(0)
+        snapshot = state.bounded_scene_memory.build_snapshot(
+            grid_record.chunk_start,
+            grid_record.chunk_end,
+        )
+        return PromptContext(
+            strategy=self.name,
+            system_prompt=system_prompt,
+            user_prompt_label=BOUNDED_MEMORY_PROMPT_LABEL,
+            user_text=BOUNDED_MEMORY_TEMPLATE.format(
+                chunk_start=grid_record.chunk_start,
+                chunk_end=grid_record.chunk_end,
+                older_subtitle_summary=snapshot.older_subtitle_summary,
+                recent_raw_subtitles=snapshot.recent_raw_subtitles,
+                carry_forward_state=format_carry_forward_state(snapshot.carry_forward_state),
+            ),
+            image_path=grid_record.grid_path,
+            subtitle_context=snapshot.metadata(grid_record.chunk_end),
+        )
+
+    def record_result(
+        self,
+        grid_record: GridRecord,
+        state: StrategyState,
+        analysis: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+    ) -> None:
+        if state.bounded_scene_memory is None:
+            return
+        state.bounded_scene_memory.record_result(
+            grid_filename=grid_record.grid_filename,
+            chunk_start=grid_record.chunk_start,
+            chunk_end=grid_record.chunk_end,
+            analysis=analysis,
+            error=error,
         )
 
 
@@ -156,6 +243,7 @@ def get_strategy(name: str) -> ContextStrategy:
     strategies: dict[str, ContextStrategy] = {
         ImageOnlyStrategy.name: ImageOnlyStrategy(),
         ImageWithRawSubtitlesStrategy.name: ImageWithRawSubtitlesStrategy(),
+        ImageWithBoundedSubtitleMemoryStrategy.name: ImageWithBoundedSubtitleMemoryStrategy(),
     }
     try:
         return strategies[name]
@@ -173,8 +261,37 @@ def get_strategy_prompt_defaults(name: str) -> dict[str, str]:
             "user_prompt_label": RAW_SUBTITLE_PROMPT_LABEL,
             "user_prompt_template": RAW_SUBTITLE_TEMPLATE,
         },
+        ImageWithBoundedSubtitleMemoryStrategy.name: {
+            "user_prompt_label": BOUNDED_MEMORY_PROMPT_LABEL,
+            "user_prompt_template": BOUNDED_MEMORY_TEMPLATE,
+        },
     }
     try:
         return templates[name]
     except KeyError as error:
         raise ValueError(f"Unknown strategy {name}.") from error
+
+
+def format_carry_forward_state(carry_forward_state: dict[str, Any]) -> str:
+    recent_summaries = carry_forward_state.get("recent_scene_summaries", [])
+    summary_lines = [
+        f"- {entry['start']:.1f}-{entry['end']:.1f}s {entry['summary']}"
+        for entry in recent_summaries
+        if isinstance(entry, dict) and "summary" in entry
+    ]
+    active_threads = carry_forward_state.get("active_threads", [])
+    label_snapshot = carry_forward_state.get("label_snapshot", {})
+    named_entities = ", ".join(carry_forward_state.get("named_entities", [])) or "None"
+    warning_text = (
+        ", ".join(carry_forward_state.get("persistent_content_warnings", [])) or "None"
+    )
+    sections = [
+        "Recent scene summaries:",
+        "\n".join(summary_lines) if summary_lines else "- None",
+        "Active threads:",
+        "\n".join(f"- {thread}" for thread in active_threads) if active_threads else "- None",
+        f"Named entities: {named_entities}",
+        f"Persistent content warnings: {warning_text}",
+        f"Latest label snapshot: {label_snapshot or 'None'}",
+    ]
+    return "\n".join(sections)

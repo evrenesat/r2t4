@@ -13,3 +13,9 @@
 - Added batch CLI overrides so the default local model can be changed without editing code.
 - Added subtitle export during extraction so each run now carries its own `subtitles/` directory and catalog next to the grids.
 - Changed inference subtitle resolution to prefer run-local extracted subtitles, making the original movie path optional for normal subtitle-based runs.
+- Added optional `subliminal` subtitle download fallback for cases where embedded subtitles are missing.
+- Added a bounded subtitle memory strategy that keeps exact subtitle lines for the last three scene windows and compresses older subtitle context into a deterministic summary.
+- Added deterministic carry-forward state derived from prior successful scene analyses so scene inference can preserve continuity without growing prompts unboundedly.
+- Added a separate Timed Descriptive Transcript artifact stage with schema validation, retry-on-validation-failure, and explicit artifact-run metadata.
+- Added optional lazy `asky` integration so artifact generation can enrich title-level context without introducing a hard dependency.
+- Added unit tests for bounded scene memory, Timed Descriptive Transcript validation, research-context loading, artifact generation retries, and bounded-memory inference state updates.

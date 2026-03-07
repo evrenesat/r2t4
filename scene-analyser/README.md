@@ -6,6 +6,8 @@ This project has two local stages:
    Builds timestamped 2x2 scene grids from a movie or episode.
 2. `inference_runner.py`
    Reads one completed grid run and sends sequential OpenAI-compatible vision requests to a local model endpoint.
+3. `artifact_runner.py`
+   Reads one completed inference run and asks a stronger model to generate a validated Timed Descriptive Transcript artifact.
 
 ## Setup
 
@@ -70,6 +72,13 @@ Grid images are resolved from `<grid_run_dir>/grids/` using the filenames stored
 
 - `image_only`
 - `image_with_raw_subtitles`
+- `image_with_bounded_subtitle_memory`
+
+The bounded strategy keeps the prompt size stable by combining:
+
+- exact raw subtitles for the last three scene windows
+- a deterministic compact summary of older subtitle lines
+- a deterministic carry-forward state derived from prior successful scene analyses
 
 ### Subtitle sources
 
@@ -78,14 +87,15 @@ Resolution order:
 1. external subtitle file passed with `--subtitle-path`
 2. extracted subtitle files in `<grid_run_dir>/subtitles/`
 3. embedded subtitle stream from the source video if `--video-path` is provided
+4. `subliminal` download if `--allow-subliminal-download` is enabled
 
 The default selection policy is: first matching English subtitle, otherwise the first available subtitle. `--subtitle-language` and `--subtitle-stream-index` override that behavior.
 
-Embedded subtitles currently support text subtitle codecs that can be normalized as ASS, SRT, or VTT. Extracted run subtitles are preferred so inference does not normally need the original movie file.
+Embedded subtitles currently support text subtitle codecs that can be normalized as ASS, SRT, or VTT. Extracted run subtitles are preferred so inference does not normally need the original movie file. If extraction finds no embedded subtitles, the extractor can optionally use `subliminal` to download subtitles into the run-local `subtitles/` directory.
 
 ### Default local endpoint
 
-- Model: `qwen3.5-35b-a3b@iq4_xs`
+- Model: `qwen3.5-2b`
 - Chat completions URL: `http://localhost:1234/v1/chat/completions`
 
 ### Run the inference stage
@@ -106,6 +116,14 @@ uv run python inference_runner.py \
   --strategy image_with_raw_subtitles
 ```
 
+Image plus bounded subtitle memory:
+
+```bash
+uv run python inference_runner.py \
+  --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
+  --strategy image_with_bounded_subtitle_memory
+```
+
 If a run does not have extracted subtitles and you want embedded-subtitle fallback, add `--video-path /path/to/movie.mkv`.
 
 Useful flags:
@@ -118,6 +136,49 @@ Useful flags:
 - `--limit`
 - `--max-chunk-end-seconds`
 - `--output-name`
+- `--allow-subliminal-download`
+
+## Stage 3: Timed Descriptive Transcript Generation
+
+The final artifact stage is intentionally separate from scene inference. The small scene-analysis model remains an intermediate signal; a stronger model authors the final file.
+
+Artifact output path:
+
+`<inference_run_dir>/artifact_runs/<timestamp>_timed_descriptive_transcript_<model>/`
+
+Artifacts:
+
+- `timed_descriptive_transcript.json`
+- `run.json`
+
+Optional title-level research can be provided through `asky` without making it a required dependency.
+
+Generate a Timed Descriptive Transcript:
+
+```bash
+uv run python artifact_runner.py \
+  --inference-run-dir output/run_balanced_2026-03-06_00-41-08/inference_runs/<your_run_dir> \
+  --model <capable_model_alias_or_id> \
+  --title-name "Dexter: Original Sin"
+```
+
+With optional `asky` enrichment:
+
+```bash
+uv run python artifact_runner.py \
+  --inference-run-dir output/run_balanced_2026-03-06_00-41-08/inference_runs/<your_run_dir> \
+  --model <capable_model_alias_or_id> \
+  --title-name "Dexter: Original Sin" \
+  --asky-model-alias <asky_alias>
+```
+
+Useful artifact flags:
+
+- `--chat-completions-url`
+- `--asky-model-alias`
+- `--asky-research-source-mode`
+- `--max-validation-retries`
+- `--allow-partial-analysis`
 
 ### Unattended batch for the first 10 minutes
 
@@ -133,7 +194,7 @@ nohup uv run python batch_first_ten_minutes.py --model qwen3.5-35b-a3b@iq4_xs > 
 ## Verification
 
 ```bash
-uv run python -m py_compile extractor_v1.py frame_selector.py inference_runner.py subtitle_ingestion.py context_strategies.py openai_compatible_client.py
+uv run python -m py_compile extractor_v1.py frame_selector.py inference_runner.py subtitle_ingestion.py context_strategies.py openai_compatible_client.py scene_memory.py tdt_format.py artifact_runner.py research_context.py
 uv run python -m unittest discover -s tests -p 'test_*.py'
 curl -sS http://localhost:1234/v1/models
 ```
@@ -152,6 +213,6 @@ uv run python inference_runner.py \
 uv run python inference_runner.py \
   --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
   --video-path /Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv \
-  --strategy image_with_raw_subtitles \
+  --strategy image_with_bounded_subtitle_memory \
   --limit 2
 ```

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import importlib
 import json
 import logging
 import re
@@ -88,6 +89,7 @@ def load_subtitles(
     grid_run_dir: Path | None = None,
     subtitle_language: str = "eng",
     subtitle_stream_index: int | None = None,
+    allow_subliminal_download: bool = False,
 ) -> tuple[SubtitleSource, list[SubtitleEvent]]:
     if subtitle_path is not None:
         return load_external_subtitles(subtitle_path)
@@ -100,7 +102,18 @@ def load_subtitles(
             if video_path is None:
                 raise
     if video_path is not None:
-        return load_embedded_subtitles(video_path, subtitle_language, subtitle_stream_index)
+        try:
+            return load_embedded_subtitles(video_path, subtitle_language, subtitle_stream_index)
+        except ValueError:
+            if allow_subliminal_download:
+                downloaded = download_subtitles_with_subliminal(
+                    video_path,
+                    grid_run_dir / SUBTITLES_DIRNAME if grid_run_dir is not None else video_path.parent,
+                    subtitle_language,
+                )
+                if downloaded:
+                    return load_downloaded_subtitles(downloaded, subtitle_language)
+            raise
     raise ValueError(
         "No subtitles available. Provide --subtitle-path or run inference against a grid run "
         "that includes extracted subtitles."
@@ -171,6 +184,18 @@ def load_embedded_subtitles(
     ), events
 
 
+def export_available_subtitles(
+    video_path: Path,
+    output_dir: Path,
+    subtitle_language: str = "eng",
+    allow_subliminal_download: bool = False,
+) -> list[SubtitleSource]:
+    exported_sources = export_embedded_subtitles(video_path, output_dir)
+    if exported_sources or not allow_subliminal_download:
+        return exported_sources
+    return download_subtitles_with_subliminal(video_path, output_dir, subtitle_language)
+
+
 def export_embedded_subtitles(video_path: Path, output_dir: Path) -> list[SubtitleSource]:
     streams = discover_embedded_subtitle_streams(video_path)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -217,6 +242,80 @@ def export_embedded_subtitles(video_path: Path, output_dir: Path) -> list[Subtit
     return exported_sources
 
 
+def download_subtitles_with_subliminal(
+    video_path: Path,
+    output_dir: Path,
+    subtitle_language: str = "eng",
+) -> list[SubtitleSource]:
+    try:
+        subliminal = importlib.import_module("subliminal")
+        babelfish = importlib.import_module("babelfish")
+    except ImportError as error:
+        raise ValueError("subliminal support is not available in this environment.") from error
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    language = build_subliminal_language(babelfish, subtitle_language)
+    video = subliminal.scan_video(str(video_path))
+    subtitles_by_video = subliminal.download_best_subtitles(
+        {video},
+        {language},
+        only_one=False,
+    )
+    subtitles = subtitles_by_video.get(video, [])
+    if not subtitles:
+        return []
+
+    saved_subtitles = subliminal.save_subtitles(
+        video,
+        subtitles,
+        directory=str(output_dir),
+        language_type_suffix=True,
+    )
+    sources: list[SubtitleSource] = []
+    for subtitle in saved_subtitles:
+        subtitle_path = Path(subtitle.get_path(video))
+        source = SubtitleSource(
+            kind="downloaded",
+            format_name=normalize_format_name(
+                subtitle.subtitle_format or subtitle_path.suffix.lstrip(".")
+            ),
+            identifier=str(subtitle_path),
+            language=get_subtitle_language_code(subtitle),
+            title=getattr(subtitle, "provider_name", None),
+            stream_index=None,
+        )
+        sources.append(source)
+
+    write_subtitle_catalog(output_dir, sources)
+    return sources
+
+
+def load_downloaded_subtitles(
+    sources: list[SubtitleSource], subtitle_language: str
+) -> tuple[SubtitleSource, list[SubtitleEvent]]:
+    entries = [
+        {
+            "index": source.stream_index,
+            "format_name": source.format_name,
+            "identifier": source.identifier,
+            "language": source.language,
+            "title": source.title,
+        }
+        for source in sources
+    ]
+    chosen = choose_subtitle_stream(entries, subtitle_language, None)
+    chosen_source = next(
+        source for source in sources if source.identifier == chosen["identifier"]
+    )
+    events = parse_subtitle_text(
+        Path(chosen_source.identifier).read_text(encoding="utf-8-sig"),
+        chosen_source.format_name,
+    )
+    if not events:
+        raise ValueError(f"No subtitle events found in downloaded subtitle {chosen_source.identifier}.")
+    return chosen_source, events
+
+
 def discover_extracted_subtitle_entries(
     grid_run_dir: Path,
 ) -> list[dict[str, str | int | None]]:
@@ -240,6 +339,26 @@ def discover_extracted_subtitle_entries(
             }
         )
     return entries
+
+
+def write_subtitle_catalog(output_dir: Path, sources: list[SubtitleSource]) -> None:
+    catalog_path = output_dir / SUBTITLE_CATALOG_FILENAME
+    catalog_path.write_text(
+        json.dumps(
+            [
+                {
+                    "index": source.stream_index,
+                    "format_name": source.format_name,
+                    "identifier": source.identifier,
+                    "language": source.language,
+                    "title": source.title,
+                }
+                for source in sources
+            ],
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
 
 
 def discover_embedded_subtitle_streams(video_path: Path) -> list[dict[str, str | int | None]]:
@@ -361,6 +480,24 @@ def slugify_subtitle_part(value: str) -> str:
     cleaned = "".join(character if character.isalnum() else "_" for character in value)
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     return cleaned or "subtitle"
+
+
+def build_subliminal_language(babelfish: object, subtitle_language: str) -> object:
+    language_class = getattr(babelfish, "Language")
+    normalized = subtitle_language.lower()
+    if len(normalized) == 2:
+        return language_class.fromalpha2(normalized)
+    return language_class.fromalpha3b(normalized)
+
+
+def get_subtitle_language_code(subtitle: object) -> str | None:
+    language = getattr(subtitle, "language", None)
+    if language is None:
+        return None
+    alpha3b = getattr(language, "alpha3b", None)
+    if alpha3b:
+        return str(alpha3b)
+    return str(language)
 
 
 def parse_subtitle_text(raw_text: str, format_name: str) -> list[SubtitleEvent]:

@@ -42,6 +42,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-chunk-end-seconds", type=float, default=MAX_CHUNK_END_SECONDS
     )
+    parser.add_argument(
+        "--allow-subliminal-download",
+        action="store_true",
+        help="Allow network subtitle download when no extracted or embedded subtitles are available.",
+    )
     return parser.parse_args()
 
 
@@ -53,6 +58,7 @@ def build_run_config(
     chat_completions_url: str,
     output_name: str,
     max_chunk_end_seconds: float,
+    allow_subliminal_download: bool,
 ) -> RunConfig:
     return RunConfig(
         grid_run_dir=grid_run_dir,
@@ -63,6 +69,7 @@ def build_run_config(
         subtitle_path=None,
         subtitle_language="eng",
         subtitle_stream_index=None,
+        allow_subliminal_download=allow_subliminal_download,
         limit=None,
         max_chunk_end_seconds=max_chunk_end_seconds,
         output_name=output_name,
@@ -91,6 +98,7 @@ async def run_batch(args: argparse.Namespace) -> Path:
                 chat_completions_url=args.chat_completions_url,
                 output_name=args.output_name,
                 max_chunk_end_seconds=args.max_chunk_end_seconds,
+                allow_subliminal_download=args.allow_subliminal_download,
             )
         )
         run_summary = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
@@ -107,6 +115,7 @@ async def run_batch(args: argparse.Namespace) -> Path:
         "video_path": str(video_path),
         "model": args.model,
         "chat_completions_url": args.chat_completions_url,
+        "allow_subliminal_download": args.allow_subliminal_download,
         "max_chunk_end_seconds": args.max_chunk_end_seconds,
         "strategies": list(STRATEGIES),
         "started_at": batch_started_at,

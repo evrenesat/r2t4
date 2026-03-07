@@ -18,7 +18,7 @@ from frame_selector import (
     derive_thresholds,
     select_chunk_frames,
 )
-from subtitle_ingestion import SUBTITLES_DIRNAME, export_embedded_subtitles
+from subtitle_ingestion import SUBTITLES_DIRNAME, export_available_subtitles
 
 VIDEO_PATH = "/Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv"
 OUTPUT_DIR = "output"
@@ -66,6 +66,7 @@ CUT_MERGE_SEC = PRESETS[PRESET]["CUT_MERGE_SEC"]
 MIN_FRAME_DISTANCE = PRESETS[PRESET]["MIN_FRAME_DISTANCE"]
 BLACK_FRAME_LUMA_THRESHOLD = PRESETS[PRESET]["BLACK_FRAME_LUMA_THRESHOLD"]
 ENABLE_DIAGNOSTICS = True
+ALLOW_SUBLIMINAL_DOWNLOAD = True
 
 GRID_COLS = 2
 GRID_ROWS = 2
@@ -86,6 +87,7 @@ def runtime_config() -> dict[str, Any]:
         "MIN_FRAME_DISTANCE": MIN_FRAME_DISTANCE,
         "BLACK_FRAME_LUMA_THRESHOLD": BLACK_FRAME_LUMA_THRESHOLD,
         "ENABLE_DIAGNOSTICS": ENABLE_DIAGNOSTICS,
+        "ALLOW_SUBLIMINAL_DOWNLOAD": ALLOW_SUBLIMINAL_DOWNLOAD,
     }
 
 
@@ -309,8 +311,11 @@ def process_video() -> None:
     phase_timings["scene_cut_probe"] = time.perf_counter() - started
 
     started = time.perf_counter()
-    exported_subtitles = export_embedded_subtitles(
-        Path(VIDEO_PATH), Path(subtitles_output_dir)
+    exported_subtitles = export_available_subtitles(
+        Path(VIDEO_PATH),
+        Path(subtitles_output_dir),
+        subtitle_language="eng",
+        allow_subliminal_download=config["ALLOW_SUBLIMINAL_DOWNLOAD"],
     )
     phase_timings["subtitle_export"] = time.perf_counter() - started
 

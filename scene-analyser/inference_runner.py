@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from scene_memory import BoundedSceneMemory
 from context_strategies import (
     StrategyState,
     build_grid_record,
@@ -48,6 +49,7 @@ class RunConfig:
     subtitle_path: Path | None
     subtitle_language: str
     subtitle_stream_index: int | None
+    allow_subliminal_download: bool
     limit: int | None
     max_chunk_end_seconds: float | None
     output_name: str | None
@@ -60,13 +62,24 @@ def parse_args() -> RunConfig:
     parser.add_argument("--grid-run-dir", required=True)
     parser.add_argument("--video-path")
     parser.add_argument(
-        "--strategy", required=True, choices=["image_only", "image_with_raw_subtitles"]
+        "--strategy",
+        required=True,
+        choices=[
+            "image_only",
+            "image_with_raw_subtitles",
+            "image_with_bounded_subtitle_memory",
+        ],
     )
     parser.add_argument("--model", default=DEFAULT_MODEL)
     parser.add_argument("--chat-completions-url", default=DEFAULT_CHAT_COMPLETIONS_URL)
     parser.add_argument("--subtitle-path")
     parser.add_argument("--subtitle-language", default=DEFAULT_SUBTITLE_LANGUAGE)
     parser.add_argument("--subtitle-stream-index", type=int)
+    parser.add_argument(
+        "--allow-subliminal-download",
+        action="store_true",
+        help="Download subtitles with subliminal if no external, extracted, or embedded subtitles are available.",
+    )
     parser.add_argument("--limit", type=int)
     parser.add_argument(
         "--max-chunk-end-seconds", type=float, default=DEFAULT_MAX_CHUNK_END_SECONDS
@@ -82,6 +95,7 @@ def parse_args() -> RunConfig:
         subtitle_path=Path(args.subtitle_path) if args.subtitle_path else None,
         subtitle_language=args.subtitle_language,
         subtitle_stream_index=args.subtitle_stream_index,
+        allow_subliminal_download=args.allow_subliminal_download,
         limit=args.limit,
         max_chunk_end_seconds=args.max_chunk_end_seconds,
         output_name=args.output_name,
@@ -156,6 +170,14 @@ def build_strategy_state(
                 "The raw subtitle strategy requires subtitles before the run starts."
             )
         return StrategyState(subtitle_accumulator=SubtitleAccumulator(subtitle_events))
+    if strategy_name == "image_with_bounded_subtitle_memory":
+        if subtitle_source is None or subtitle_events is None:
+            raise ValueError(
+                "The bounded subtitle memory strategy requires subtitles before the run starts."
+            )
+        return StrategyState(
+            bounded_scene_memory=BoundedSceneMemory(subtitle_events),
+        )
     return StrategyState()
 
 
@@ -233,13 +255,17 @@ async def run_inference(config: RunConfig) -> Path:
     subtitle_source: SubtitleSource | None = None
     subtitle_events = None
 
-    if config.strategy == "image_with_raw_subtitles":
+    if config.strategy in {
+        "image_with_raw_subtitles",
+        "image_with_bounded_subtitle_memory",
+    }:
         subtitle_source, subtitle_events = load_subtitles(
             video_path=config.video_path,
             subtitle_path=config.subtitle_path,
             grid_run_dir=config.grid_run_dir,
             subtitle_language=config.subtitle_language,
             subtitle_stream_index=config.subtitle_stream_index,
+            allow_subliminal_download=config.allow_subliminal_download,
         )
 
     run_dir = create_inference_run_dir(
@@ -295,6 +321,12 @@ async def run_inference(config: RunConfig) -> Path:
             inference_started_at,
             inference_finished_at,
             inference_duration_sec,
+        )
+        strategy.record_result(
+            grid_record=grid_record,
+            state=strategy_state,
+            analysis=payload["analysis"],
+            error=payload["error"],
         )
         append_jsonl(results_path, payload)
         if isinstance(completion, CompletionSuccess):

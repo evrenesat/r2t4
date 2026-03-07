@@ -18,8 +18,16 @@ class FakeClient:
         self.calls += 1
         if self.calls == 1:
             return CompletionSuccess(
-                parsed_json={"summary": "ok"},
-                raw_text='{"summary":"ok"}',
+                parsed_json={
+                    "summary": "ok",
+                    "primary_mood": "Neutral",
+                    "tension_trend": "Flat",
+                    "threat_anticipation": "None",
+                    "social_discomfort": "None",
+                    "content_warnings": [],
+                    "setting": "Indoors",
+                },
+                raw_text='{"summary":"ok","primary_mood":"Neutral","tension_trend":"Flat","threat_anticipation":"None","social_discomfort":"None","content_warnings":[],"setting":"Indoors"}',
                 repaired_json=False,
                 retry_count=0,
             )
@@ -72,6 +80,7 @@ class InferenceRunnerTests(unittest.TestCase):
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,
+                allow_subliminal_download=False,
                 limit=None,
                 max_chunk_end_seconds=None,
                 output_name="test",
@@ -117,6 +126,7 @@ class InferenceRunnerTests(unittest.TestCase):
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,
+                allow_subliminal_download=False,
                 limit=None,
                 max_chunk_end_seconds=None,
                 output_name=None,
@@ -170,6 +180,7 @@ class InferenceRunnerTests(unittest.TestCase):
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,
+                allow_subliminal_download=False,
                 limit=None,
                 max_chunk_end_seconds=600.0,
                 output_name="test",
@@ -229,6 +240,7 @@ class InferenceRunnerTests(unittest.TestCase):
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,
+                allow_subliminal_download=False,
                 limit=None,
                 max_chunk_end_seconds=None,
                 output_name="test",
@@ -244,6 +256,66 @@ class InferenceRunnerTests(unittest.TestCase):
             metadata = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
             self.assertEqual(rows[0]["subtitle_context"]["event_count"], 1)
             self.assertEqual(metadata["subtitle_source"]["kind"], "extracted")
+
+    def test_run_inference_bounded_memory_updates_state_between_scenes(self) -> None:
+        with tempfile.TemporaryDirectory(dir="temp") as temp_dir:
+            root = Path(temp_dir)
+            grid_run_dir = root / "grid_run"
+            grid_run_dir.mkdir()
+            grids_dir = grid_run_dir / "grids"
+            grids_dir.mkdir()
+            (grids_dir / "scene1.jpg").write_bytes(b"fake image")
+            (grids_dir / "scene2.jpg").write_bytes(b"fake image")
+            (grid_run_dir / "manifest.jsonl").write_text(
+                "\n".join(
+                    [
+                        json.dumps({"grid_filename": "scene1.jpg", "chunk_start": 0.0, "chunk_end": 4.0}),
+                        json.dumps({"grid_filename": "scene2.jpg", "chunk_start": 4.0, "chunk_end": 8.0}),
+                    ]
+                ),
+                encoding="utf-8",
+            )
+            config = RunConfig(
+                grid_run_dir=grid_run_dir,
+                video_path=None,
+                strategy="image_with_bounded_subtitle_memory",
+                model="model-id",
+                chat_completions_url="http://localhost:1234/v1/chat/completions",
+                subtitle_path=None,
+                subtitle_language="eng",
+                subtitle_stream_index=None,
+                allow_subliminal_download=False,
+                limit=None,
+                max_chunk_end_seconds=None,
+                output_name="test",
+            )
+
+            with patch(
+                "inference_runner.load_subtitles",
+                return_value=(
+                    SubtitleSource(
+                        kind="embedded",
+                        format_name="ass",
+                        identifier="/tmp/movie.mkv",
+                        language="eng",
+                        stream_index=2,
+                    ),
+                    [
+                        SubtitleEvent(0.5, 1.0, "hello"),
+                        SubtitleEvent(4.5, 5.0, "there"),
+                    ],
+                ),
+            ), patch("inference_runner.OpenAICompatibleClient", FakeClient):
+                run_dir = asyncio.run(run_inference(config))
+
+            rows = [
+                json.loads(line)
+                for line in (run_dir / "results.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
+            self.assertEqual(rows[0]["subtitle_context"]["mode"], "bounded_memory")
+            self.assertEqual(rows[1]["subtitle_context"]["mode"], "bounded_memory")
+            self.assertEqual(rows[1]["subtitle_context"]["carry_forward_scene_count"], 1)
+            self.assertGreaterEqual(rows[1]["subtitle_context"]["recent_scene_count"], 2)
 
 
 if __name__ == "__main__":
