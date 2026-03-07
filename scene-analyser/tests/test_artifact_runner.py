@@ -3,9 +3,10 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 from artifact_runner import ArtifactRunConfig, run_artifact_generation
+from pipeline_config import PipelineConfig, ResolvedModelConfig
 from openai_compatible_client import CompletionSuccess
 from subtitle_ingestion import SubtitleEvent, SubtitleSource
 from tdt_format import TDT_FILENAME
@@ -116,16 +117,28 @@ class ArtifactRunnerTests(unittest.TestCase):
             )
             config = ArtifactRunConfig(
                 inference_run_dir=inference_run_dir,
-                model="big-model",
-                chat_completions_url=None,
+                config_path=Path("dummy.toml"),
+                profile="default",
                 title_name="Dexter: Original Sin",
-                asky_model_alias=None,
                 asky_research_source_mode=None,
                 max_validation_retries=2,
                 allow_partial_analysis=False,
             )
 
+            mock_pipeline_config = MagicMock(spec=PipelineConfig)
+            mock_pipeline_config.roles = {"artifact_model": "big-model"}
+            mock_pipeline_config.resolve_model.return_value = ResolvedModelConfig(
+                id="big-model",
+                api_url="http://localhost:1234/v1/chat/completions",
+                api_key="sk-test",
+                context_size=32000,
+                image_support=False,
+                api_name="lmstudio",
+            )
+
             with patch("artifact_runner.OpenAICompatibleClient", FakeArtifactClient), patch(
+                "artifact_runner.PipelineConfig", return_value=mock_pipeline_config
+            ), patch(
                 "artifact_runner.load_subtitles",
                 return_value=(
                     SubtitleSource(
@@ -175,17 +188,28 @@ class ArtifactRunnerTests(unittest.TestCase):
             )
             config = ArtifactRunConfig(
                 inference_run_dir=inference_run_dir,
-                model="big-model",
-                chat_completions_url=None,
+                config_path=Path("dummy.toml"),
+                profile="default",
                 title_name="Dexter: Original Sin",
-                asky_model_alias=None,
                 asky_research_source_mode=None,
                 max_validation_retries=2,
                 allow_partial_analysis=False,
             )
 
-            with self.assertRaises(ValueError):
-                asyncio.run(run_artifact_generation(config))
+            mock_pipeline_config = MagicMock(spec=PipelineConfig)
+            mock_pipeline_config.roles = {"artifact_model": "big-model"}
+            mock_pipeline_config.resolve_model.return_value = ResolvedModelConfig(
+                id="big-model",
+                api_url="http://localhost:1234/v1/chat/completions",
+                api_key="sk-test",
+                context_size=32000,
+                image_support=False,
+                api_name="lmstudio",
+            )
+
+            with patch("artifact_runner.PipelineConfig", return_value=mock_pipeline_config):
+                with self.assertRaises(ValueError):
+                    asyncio.run(run_artifact_generation(config))
 
 
 if __name__ == "__main__":

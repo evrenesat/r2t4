@@ -19,3 +19,13 @@
 - Added a separate Timed Descriptive Transcript artifact stage with schema validation, retry-on-validation-failure, and explicit artifact-run metadata.
 - Added optional lazy `asky` integration so artifact generation can enrich title-level context without introducing a hard dependency.
 - Added unit tests for bounded scene memory, Timed Descriptive Transcript validation, research-context loading, artifact generation retries, and bounded-memory inference state updates.
+
+## 2026-03-07
+
+- Consolidated runtime settings into `config/pipeline.toml` with alias-based provider resolution and profile overrides.
+- Removed hardcoded title paths from the new pipeline path so extractor, pipeline runner, and artifact generation all resolve runtime choices from config first.
+- Added normalized subtitle transcript export in `START_SECOND | text` format to support cache-friendly capable-model summary prompts.
+- Changed subtitle summary precompute to reuse the same whole-transcript prompt body and vary only the cutoff second and target chunk.
+- Kept the extractor alive until summary precompute finishes, while letting `pipeline_runner.py` start inference after grid writing when `summary_gate = "start_when_ready"`.
+- Fixed artifact generation to use the config-resolved OpenAI-compatible client path instead of stale direct constructor arguments.
+- Updated `ARCHITECTURE.md` and `README.md` to describe the normalized transcript flow, summary gating, and Mermaid runtime diagram.

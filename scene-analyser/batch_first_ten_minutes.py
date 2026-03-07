@@ -8,36 +8,30 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from inference_runner import (
-    DEFAULT_CHAT_COMPLETIONS_URL,
-    DEFAULT_MODEL,
-    RunConfig,
-    configure_logging,
-    run_inference,
-)
+from pipeline_config import PipelineConfig
+from inference_runner import RunConfig, configure_logging, run_inference
 
 LOGGER = logging.getLogger(__name__)
 
 GRID_RUN_DIR = Path("output/run_balanced_2026-03-06_00-41-08")
-VIDEO_PATH = Path(
-    "/Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv"
-)
 MAX_CHUNK_END_SECONDS = 600.0
 BATCH_NAME = "first_10_minutes"
-STRATEGIES = ("image_only", "image_with_raw_subtitles")
+STRATEGIES = (
+    "image_only",
+    "image_with_raw_subtitles",
+    "image_with_precomputed_subtitle_context",
+)
 BATCH_SUMMARY_PREFIX = "batch_first_10_minutes"
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Run image-only and subtitle inference for the first 10 minutes."
+        description="Run multiple inference strategies for the first 10 minutes."
     )
     parser.add_argument("--grid-run-dir", default=str(GRID_RUN_DIR))
-    parser.add_argument("--video-path", default=str(VIDEO_PATH))
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument(
-        "--chat-completions-url", default=DEFAULT_CHAT_COMPLETIONS_URL
-    )
+    parser.add_argument("--video-path")
+    parser.add_argument("--config", default="config/pipeline.toml")
+    parser.add_argument("--profile", default="default")
     parser.add_argument("--output-name", default=BATCH_NAME)
     parser.add_argument(
         "--max-chunk-end-seconds", type=float, default=MAX_CHUNK_END_SECONDS
@@ -54,8 +48,8 @@ def build_run_config(
     strategy: str,
     grid_run_dir: Path,
     video_path: Path,
-    model: str,
-    chat_completions_url: str,
+    config_path: Path,
+    profile: str,
     output_name: str,
     max_chunk_end_seconds: float,
     allow_subliminal_download: bool,
@@ -64,8 +58,8 @@ def build_run_config(
         grid_run_dir=grid_run_dir,
         video_path=video_path,
         strategy=strategy,
-        model=model,
-        chat_completions_url=chat_completions_url,
+        config_path=config_path,
+        profile=profile,
         subtitle_path=None,
         subtitle_language="eng",
         subtitle_stream_index=None,
@@ -85,7 +79,12 @@ async def run_batch(args: argparse.Namespace) -> Path:
     batch_start_perf = datetime.now()
     run_summaries = []
     grid_run_dir = Path(args.grid_run_dir)
-    video_path = Path(args.video_path)
+    config_path = Path(args.config)
+    pipeline_config = PipelineConfig(config_path, args.profile)
+    video_path = pipeline_config.resolve_video_path(
+        Path(args.video_path) if args.video_path else None
+    )
+    model_alias = pipeline_config.roles.get("scene_analysis_model", "unknown")
 
     for strategy in STRATEGIES:
         LOGGER.info("Starting %s run for the first 10 minutes.", strategy)
@@ -94,8 +93,8 @@ async def run_batch(args: argparse.Namespace) -> Path:
                 strategy=strategy,
                 grid_run_dir=grid_run_dir,
                 video_path=video_path,
-                model=args.model,
-                chat_completions_url=args.chat_completions_url,
+                config_path=config_path,
+                profile=args.profile,
                 output_name=args.output_name,
                 max_chunk_end_seconds=args.max_chunk_end_seconds,
                 allow_subliminal_download=args.allow_subliminal_download,
@@ -113,8 +112,8 @@ async def run_batch(args: argparse.Namespace) -> Path:
         "batch_name": args.output_name,
         "grid_run_dir": str(grid_run_dir),
         "video_path": str(video_path),
-        "model": args.model,
-        "chat_completions_url": args.chat_completions_url,
+        "model_alias": model_alias,
+        "profile": args.profile,
         "allow_subliminal_download": args.allow_subliminal_download,
         "max_chunk_end_seconds": args.max_chunk_end_seconds,
         "strategies": list(STRATEGIES),
@@ -123,7 +122,7 @@ async def run_batch(args: argparse.Namespace) -> Path:
         "run_count": len(run_summaries),
         "total_batch_duration_sec": (datetime.now() - batch_start_perf).total_seconds(),
         "total_inference_duration_sec": sum(
-            summary["total_inference_duration_sec"] for summary in run_summaries
+            summary.get("total_inference_duration_sec", 0.0) for summary in run_summaries
         ),
         "runs": run_summaries,
     }

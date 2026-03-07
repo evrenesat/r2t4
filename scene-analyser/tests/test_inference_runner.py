@@ -14,7 +14,7 @@ class FakeClient:
     def __init__(self, *_args, **_kwargs) -> None:
         self.calls = 0
 
-    async def analyze(self, model, prompt_context):
+    async def analyze(self, model, prompt_context, config=None):
         self.calls += 1
         if self.calls == 1:
             return CompletionSuccess(
@@ -75,8 +75,8 @@ class InferenceRunnerTests(unittest.TestCase):
                 grid_run_dir=grid_run_dir,
                 video_path=None,
                 strategy="image_only",
-                model="model-id",
-                chat_completions_url="http://localhost:1234/v1/chat/completions",
+                config_path=Path("config/pipeline.toml"),
+                profile="default",
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,
@@ -121,8 +121,8 @@ class InferenceRunnerTests(unittest.TestCase):
                 grid_run_dir=grid_run_dir,
                 video_path=None,
                 strategy="image_with_raw_subtitles",
-                model="model-id",
-                chat_completions_url="http://localhost:1234/v1/chat/completions",
+                config_path=Path("config/pipeline.toml"),
+                profile="default",
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,
@@ -175,8 +175,8 @@ class InferenceRunnerTests(unittest.TestCase):
                 grid_run_dir=grid_run_dir,
                 video_path=None,
                 strategy="image_only",
-                model="model-id",
-                chat_completions_url="http://localhost:1234/v1/chat/completions",
+                config_path=Path("config/pipeline.toml"),
+                profile="default",
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,
@@ -235,8 +235,8 @@ class InferenceRunnerTests(unittest.TestCase):
                 grid_run_dir=grid_run_dir,
                 video_path=None,
                 strategy="image_with_raw_subtitles",
-                model="model-id",
-                chat_completions_url="http://localhost:1234/v1/chat/completions",
+                config_path=Path("config/pipeline.toml"),
+                profile="default",
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,
@@ -279,8 +279,8 @@ class InferenceRunnerTests(unittest.TestCase):
                 grid_run_dir=grid_run_dir,
                 video_path=None,
                 strategy="image_with_bounded_subtitle_memory",
-                model="model-id",
-                chat_completions_url="http://localhost:1234/v1/chat/completions",
+                config_path=Path("config/pipeline.toml"),
+                profile="default",
                 subtitle_path=None,
                 subtitle_language="eng",
                 subtitle_stream_index=None,

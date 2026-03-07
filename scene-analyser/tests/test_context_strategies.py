@@ -6,6 +6,7 @@ from context_strategies import (
     ImageWithBoundedSubtitleMemoryStrategy,
     ImageOnlyStrategy,
     ImageWithRawSubtitlesStrategy,
+    ImageWithPrecomputedSubtitleContextStrategy,
     StrategyState,
 )
 from scene_memory import BoundedSceneMemory
@@ -79,6 +80,30 @@ class ContextStrategyTests(unittest.TestCase):
         self.assertIn("Dexter", prompt_context.user_text)
         self.assertEqual(prompt_context.subtitle_context["mode"], "bounded_memory")
         self.assertEqual(prompt_context.subtitle_context["recent_scene_count"], 3)
+
+    def test_precomputed_strategy_builds_prompt_from_cache(self) -> None:
+        strategy = ImageWithPrecomputedSubtitleContextStrategy()
+        state = StrategyState(
+            precomputed_summaries={
+                "scene1.jpg": {
+                    "grid_filename": "scene1.jpg",
+                    "summary_text": "A nice summary.",
+                    "recent_raw_subtitles": "Some recent text.",
+                }
+            }
+        )
+        grid_record = GridRecord("scene1.jpg", "/tmp/scene1.jpg", 0.0, 4.0)
+
+        prompt_context = asyncio.run(
+            strategy.build_context(grid_record, state, "system prompt")
+        )
+
+        self.assertEqual(prompt_context.strategy, "image_with_precomputed_subtitle_context")
+        self.assertIn("A nice summary.", prompt_context.user_text)
+        self.assertIn("Some recent text.", prompt_context.user_text)
+        self.assertEqual(prompt_context.subtitle_context["mode"], "precomputed")
+        self.assertTrue(prompt_context.subtitle_context["summary_available"])
+        self.assertTrue(prompt_context.subtitle_context["recent_raw_available"])
 
 
 if __name__ == "__main__":

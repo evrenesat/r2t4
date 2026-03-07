@@ -3,9 +3,9 @@
 This project has two local stages:
 
 1. `extractor_v1.py`
-   Builds timestamped 2x2 scene grids from a movie or episode.
-2. `inference_runner.py`
-   Reads one completed grid run and sends sequential OpenAI-compatible vision requests to a local model endpoint.
+   Builds timestamped 2x2 scene grids from a movie or episode. Subtitle extraction, normalized transcript export, and summary precompute happen here.
+2. `pipeline_runner.py` / `inference_runner.py`
+   Reads one completed grid run and sends sequential OpenAI-compatible vision requests to a local model endpoint, utilizing precomputed capable-model summaries.
 3. `artifact_runner.py`
    Reads one completed inference run and asks a stronger model to generate a validated Timed Descriptive Transcript artifact.
 
@@ -30,6 +30,16 @@ System dependency:
 
 - `ffmpeg`
 
+## Configuration
+
+The pipeline is driven by a single TOML config at `config/pipeline.toml`.
+Instead of defining models and API URLs on the CLI, define them as aliases in the TOML file and select a profile.
+
+Roles are configured:
+- `subtitle_summary_model`
+- `scene_analysis_model`
+- `artifact_model`
+
 ## Stage 1: Grid Extraction
 
 Each extractor run writes to a fresh subdirectory such as:
@@ -40,14 +50,13 @@ That run directory contains:
 
 - `grids/scene*.jpg`
 - `subtitles/`
+- `contexts/subtitle_summaries.jsonl`
 - `manifest.jsonl`
 - `diagnostics.json`
 
-The `subtitles/` directory contains every text subtitle stream the extractor could export from the source title, plus a `catalog.json` file used by the inference stage.
+The `subtitles/` directory contains every text subtitle stream the extractor could export from the source title, a `catalog.json` file used by the inference stage, and `normalized_transcript.txt` for cache-friendly summary generation.
 
-The top-level `output/` directory only keeps reusable cache files.
-
-Run the extractor:
+Run the extractor directly (or rely on `pipeline_runner.py` to start it):
 
 ```bash
 uv run python extractor_v1.py
@@ -55,164 +64,76 @@ uv run python extractor_v1.py
 
 ## Stage 2: Local Vision Inference
 
-The second-stage runner reads an existing extractor run and writes inference outputs back inside it:
+The recommended way to run the pipeline is end-to-end via `pipeline_runner.py`, which starts Stage 1 and then starts Stage 2 according to `execution.summary_gate` in the TOML config:
 
-`<grid_run_dir>/inference_runs/<timestamp>_<strategy>_<model>/`
+```bash
+uv run python pipeline_runner.py \
+  --config config/pipeline.toml \
+  --profile default \
+  --video-path /path/to/movie.mkv
+```
 
-Artifacts:
+Alternatively, run the inference stage standalone on a completed run directory:
 
-- `results.jsonl`
-- `run.json`
+Image plus precomputed subtitle context (default):
 
-`run.json` stores the run-level defaults and shared prompt metadata so `results.jsonl` can stay focused on per-grid outputs and timings.
-
-Grid images are resolved from `<grid_run_dir>/grids/` using the filenames stored in `manifest.jsonl`.
+```bash
+uv run python inference_runner.py \
+  --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
+  --strategy image_with_precomputed_subtitle_context \
+  --config config/pipeline.toml \
+  --profile default
+```
 
 ### Supported v1 strategies
 
+- `image_with_precomputed_subtitle_context` (recommended)
 - `image_only`
 - `image_with_raw_subtitles`
 - `image_with_bounded_subtitle_memory`
 
-The bounded strategy keeps the prompt size stable by combining:
+The precomputed strategy reads `contexts/subtitle_summaries.jsonl` and uses:
 
-- exact raw subtitles for the last three scene windows
-- a deterministic compact summary of older subtitle lines
-- a deterministic carry-forward state derived from prior successful scene analyses
-
-### Subtitle sources
-
-Resolution order:
-
-1. external subtitle file passed with `--subtitle-path`
-2. extracted subtitle files in `<grid_run_dir>/subtitles/`
-3. embedded subtitle stream from the source video if `--video-path` is provided
-4. `subliminal` download if `--allow-subliminal-download` is enabled
-
-The default selection policy is: first matching English subtitle, otherwise the first available subtitle. `--subtitle-language` and `--subtitle-stream-index` override that behavior.
-
-Embedded subtitles currently support text subtitle codecs that can be normalized as ASS, SRT, or VTT. Extracted run subtitles are preferred so inference does not normally need the original movie file. If extraction finds no embedded subtitles, the extractor can optionally use `subliminal` to download subtitles into the run-local `subtitles/` directory.
-
-### Default local endpoint
-
-- Model: `qwen3.5-2b`
-- Chat completions URL: `http://localhost:1234/v1/chat/completions`
-
-### Run the inference stage
-
-Image only:
-
-```bash
-uv run python inference_runner.py \
-  --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
-  --strategy image_only
-```
-
-Image plus raw subtitles:
-
-```bash
-uv run python inference_runner.py \
-  --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
-  --strategy image_with_raw_subtitles
-```
-
-Image plus bounded subtitle memory:
-
-```bash
-uv run python inference_runner.py \
-  --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
-  --strategy image_with_bounded_subtitle_memory
-```
-
-If a run does not have extracted subtitles and you want embedded-subtitle fallback, add `--video-path /path/to/movie.mkv`.
-
-Useful flags:
-
-- `--model`
-- `--chat-completions-url`
-- `--subtitle-path`
-- `--subtitle-language`
-- `--subtitle-stream-index`
-- `--limit`
-- `--max-chunk-end-seconds`
-- `--output-name`
-- `--allow-subliminal-download`
+- a capable-model summary of subtitle history before the current raw tail
+- raw subtitle lines for the last three scene windows
+- the grid image as the primary evidence
 
 ## Stage 3: Timed Descriptive Transcript Generation
 
-The final artifact stage is intentionally separate from scene inference. The small scene-analysis model remains an intermediate signal; a stronger model authors the final file.
+The final artifact stage is intentionally separate from scene inference. The small scene-analysis model remains an intermediate signal; a stronger model configured by `artifact_model` authors the final file.
 
 Artifact output path:
 
 `<inference_run_dir>/artifact_runs/<timestamp>_timed_descriptive_transcript_<model>/`
-
-Artifacts:
-
-- `timed_descriptive_transcript.json`
-- `run.json`
-
-Optional title-level research can be provided through `asky` without making it a required dependency.
 
 Generate a Timed Descriptive Transcript:
 
 ```bash
 uv run python artifact_runner.py \
   --inference-run-dir output/run_balanced_2026-03-06_00-41-08/inference_runs/<your_run_dir> \
-  --model <capable_model_alias_or_id> \
+  --config config/pipeline.toml \
+  --profile default \
   --title-name "Dexter: Original Sin"
 ```
 
-With optional `asky` enrichment:
+With optional `asky` enrichment (requires `research_model` or `artifact_model` configured in TOML, and `asky` installed):
 
 ```bash
 uv run python artifact_runner.py \
   --inference-run-dir output/run_balanced_2026-03-06_00-41-08/inference_runs/<your_run_dir> \
-  --model <capable_model_alias_or_id> \
+  --config config/pipeline.toml \
+  --profile default \
   --title-name "Dexter: Original Sin" \
-  --asky-model-alias <asky_alias>
+  --asky-research-source-mode web_only
 ```
-
-Useful artifact flags:
-
-- `--chat-completions-url`
-- `--asky-model-alias`
-- `--asky-research-source-mode`
-- `--max-validation-retries`
-- `--allow-partial-analysis`
 
 ### Unattended batch for the first 10 minutes
 
-The repo includes [batch_first_ten_minutes.py](/Users/evren/code/r2t4/scene-analyser/batch_first_ten_minutes.py), which runs `image_only` first and then `image_with_raw_subtitles` for grids whose chunk end is at or before `600` seconds.
-
-Start it in the background:
-
-```bash
-mkdir -p temp
-nohup uv run python batch_first_ten_minutes.py --model qwen3.5-35b-a3b@iq4_xs > temp/batch_first_ten_minutes.log 2>&1 &
-```
+The repo includes `batch_first_ten_minutes.py`. This uses the new `pipeline_runner.py` configuration to run the first 10 minutes efficiently.
 
 ## Verification
 
 ```bash
-uv run python -m py_compile extractor_v1.py frame_selector.py inference_runner.py subtitle_ingestion.py context_strategies.py openai_compatible_client.py scene_memory.py tdt_format.py artifact_runner.py research_context.py
+uv run python -m py_compile extractor_v1.py frame_selector.py inference_runner.py subtitle_ingestion.py context_strategies.py openai_compatible_client.py scene_memory.py tdt_format.py artifact_runner.py research_context.py pipeline_config.py pipeline_runner.py subtitle_summary_precompute.py
 uv run python -m unittest discover -s tests -p 'test_*.py'
-curl -sS http://localhost:1234/v1/models
-```
-
-Smoke runs:
-
-```bash
-uv run python inference_runner.py \
-  --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
-  --video-path /Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv \
-  --strategy image_only \
-  --limit 2
-```
-
-```bash
-uv run python inference_runner.py \
-  --grid-run-dir output/run_balanced_2026-03-06_00-41-08 \
-  --video-path /Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv \
-  --strategy image_with_bounded_subtitle_memory \
-  --limit 2
 ```

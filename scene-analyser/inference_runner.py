@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from pipeline_config import PipelineConfig
 from scene_memory import BoundedSceneMemory
 from context_strategies import (
     StrategyState,
@@ -27,16 +28,10 @@ from subtitle_ingestion import SubtitleAccumulator, SubtitleSource, load_subtitl
 
 LOGGER = logging.getLogger(__name__)
 
-# DEFAULT_MODEL = "qwen3.5-35b-a3b@iq4_xs"
-# DEFAULT_MODEL = "qwen3.5-0.8b-mxfp8-mlx"
-DEFAULT_MODEL = "qwen3.5-2b"
-DEFAULT_CHAT_COMPLETIONS_URL = "http://localhost:1234/v1/chat/completions"
-DEFAULT_SUBTITLE_LANGUAGE = "eng"
 DEFAULT_PROMPTS_PATH = Path("prompts.md")
 INFERENCE_RUNS_DIRNAME = "inference_runs"
 RESULTS_FILENAME = "results.jsonl"
 RUN_METADATA_FILENAME = "run.json"
-DEFAULT_MAX_CHUNK_END_SECONDS: float | None = None
 
 
 @dataclass(frozen=True)
@@ -44,8 +39,8 @@ class RunConfig:
     grid_run_dir: Path
     video_path: Path | None
     strategy: str
-    model: str
-    chat_completions_url: str
+    config_path: Path
+    profile: str
     subtitle_path: Path | None
     subtitle_language: str
     subtitle_stream_index: int | None
@@ -63,17 +58,18 @@ def parse_args() -> RunConfig:
     parser.add_argument("--video-path")
     parser.add_argument(
         "--strategy",
-        required=True,
+        default="image_with_precomputed_subtitle_context",
         choices=[
             "image_only",
             "image_with_raw_subtitles",
             "image_with_bounded_subtitle_memory",
+            "image_with_precomputed_subtitle_context",
         ],
     )
-    parser.add_argument("--model", default=DEFAULT_MODEL)
-    parser.add_argument("--chat-completions-url", default=DEFAULT_CHAT_COMPLETIONS_URL)
+    parser.add_argument("--config", default="config/pipeline.toml")
+    parser.add_argument("--profile", default="default")
     parser.add_argument("--subtitle-path")
-    parser.add_argument("--subtitle-language", default=DEFAULT_SUBTITLE_LANGUAGE)
+    parser.add_argument("--subtitle-language", default="eng")
     parser.add_argument("--subtitle-stream-index", type=int)
     parser.add_argument(
         "--allow-subliminal-download",
@@ -82,7 +78,7 @@ def parse_args() -> RunConfig:
     )
     parser.add_argument("--limit", type=int)
     parser.add_argument(
-        "--max-chunk-end-seconds", type=float, default=DEFAULT_MAX_CHUNK_END_SECONDS
+        "--max-chunk-end-seconds", type=float, default=None
     )
     parser.add_argument("--output-name")
     args = parser.parse_args()
@@ -90,8 +86,8 @@ def parse_args() -> RunConfig:
         grid_run_dir=Path(args.grid_run_dir),
         video_path=Path(args.video_path) if args.video_path else None,
         strategy=args.strategy,
-        model=args.model,
-        chat_completions_url=args.chat_completions_url,
+        config_path=Path(args.config),
+        profile=args.profile,
         subtitle_path=Path(args.subtitle_path) if args.subtitle_path else None,
         subtitle_language=args.subtitle_language,
         subtitle_stream_index=args.subtitle_stream_index,
@@ -133,12 +129,12 @@ def load_system_prompt(prompts_path: Path = DEFAULT_PROMPTS_PATH) -> tuple[str, 
 
 
 def create_inference_run_dir(
-    grid_run_dir: Path, strategy: str, model: str, output_name: str | None
+    grid_run_dir: Path, strategy: str, model_alias: str, output_name: str | None
 ) -> Path:
     base_dir = grid_run_dir / INFERENCE_RUNS_DIRNAME
     base_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    model_slug = sanitize_slug(model)
+    model_slug = sanitize_slug(model_alias)
     suffix = sanitize_slug(output_name) if output_name else None
     name_parts = [timestamp, strategy, model_slug]
     if suffix:
@@ -163,6 +159,8 @@ def build_strategy_state(
     strategy_name: str,
     subtitle_source: SubtitleSource | None,
     subtitle_events: list[Any] | None,
+    grid_run_dir: Path,
+    pipeline_config: PipelineConfig,
 ) -> StrategyState:
     if strategy_name == "image_with_raw_subtitles":
         if subtitle_source is None or subtitle_events is None:
@@ -178,6 +176,20 @@ def build_strategy_state(
         return StrategyState(
             bounded_scene_memory=BoundedSceneMemory(subtitle_events),
         )
+    if strategy_name == "image_with_precomputed_subtitle_context":
+        summaries_path = grid_run_dir / "contexts" / "subtitle_summaries.jsonl"
+        precomputed_summaries = {}
+        if summaries_path.exists():
+            for line in summaries_path.read_text(encoding="utf-8").splitlines():
+                if line.strip():
+                    row = json.loads(line)
+                    precomputed_summaries[row["grid_filename"]] = row
+        return StrategyState(
+            precomputed_summaries=precomputed_summaries,
+            precomputed_summaries_path=summaries_path,
+            precomputed_row_poll_interval_sec=pipeline_config.subtitle_summary_config.row_poll_interval_sec,
+            precomputed_row_wait_timeout_sec=pipeline_config.subtitle_summary_config.row_wait_timeout_sec,
+        )
     return StrategyState()
 
 
@@ -192,6 +204,7 @@ def append_jsonl(path: Path, payload: dict[str, Any]) -> None:
 
 def build_run_metadata(
     config: RunConfig,
+    pipeline_config: PipelineConfig,
     subtitle_source: SubtitleSource | None,
     prompt_version: str,
     system_prompt: str,
@@ -203,12 +216,21 @@ def build_run_metadata(
     inference_durations: list[float],
     finished_at: str | None = None,
 ) -> dict[str, Any]:
+    scene_model_alias = pipeline_config.roles.get("scene_analysis_model")
+    summary_model_alias = pipeline_config.roles.get("subtitle_summary_model")
+    artifact_model_alias = pipeline_config.roles.get("artifact_model")
+
     return {
         "grid_run_dir": str(config.grid_run_dir),
         "video_path": str(config.video_path) if config.video_path is not None else None,
         "strategy": config.strategy,
-        "model": config.model,
-        "chat_completions_url": config.chat_completions_url,
+        "config_profile": pipeline_config.profile_name,
+        "model_aliases": {
+            "scene_analysis": scene_model_alias,
+            "subtitle_summary": summary_model_alias,
+            "artifact": artifact_model_alias,
+        },
+        "summary_gate": pipeline_config.execution.get("summary_gate", "start_when_ready"),
         "selection_window": {
             "limit": config.limit,
             "max_chunk_end_seconds": config.max_chunk_end_seconds,
@@ -245,6 +267,11 @@ def build_run_metadata(
 
 
 async def run_inference(config: RunConfig) -> Path:
+    pipeline_config = PipelineConfig(config.config_path, config.profile)
+    scene_model_alias = pipeline_config.roles.get("scene_analysis_model")
+    if not scene_model_alias:
+        raise ValueError("Role 'scene_analysis_model' is not configured.")
+
     manifest_rows = load_grid_manifest(
         config.grid_run_dir,
         config.limit,
@@ -271,15 +298,19 @@ async def run_inference(config: RunConfig) -> Path:
     run_dir = create_inference_run_dir(
         config.grid_run_dir,
         config.strategy,
-        config.model,
+        scene_model_alias,
         config.output_name,
     )
     results_path = run_dir / RESULTS_FILENAME
     strategy = get_strategy(config.strategy)
     strategy_state = build_strategy_state(
-        config.strategy, subtitle_source, subtitle_events
+        config.strategy,
+        subtitle_source,
+        subtitle_events,
+        config.grid_run_dir,
+        pipeline_config,
     )
-    client = OpenAICompatibleClient(config.chat_completions_url)
+    client = OpenAICompatibleClient()
     success_count = 0
     error_count = 0
     started_at = datetime.now().isoformat(timespec="seconds")
@@ -287,21 +318,27 @@ async def run_inference(config: RunConfig) -> Path:
     inference_durations: list[float] = []
     run_metadata_path = run_dir / RUN_METADATA_FILENAME
     results_path.touch()
-    write_json(
-        run_metadata_path,
-        build_run_metadata(
-            config=config,
-            subtitle_source=subtitle_source,
-            prompt_version=prompt_version,
-            system_prompt=system_prompt,
-            strategy_prompt_defaults=strategy_prompt_defaults,
-            started_at=started_at,
-            total_count=len(manifest_rows),
-            success_count=success_count,
-            error_count=error_count,
-            inference_durations=inference_durations,
-        ),
-    )
+
+    def write_metadata(finished_at: str | None = None) -> None:
+        write_json(
+            run_metadata_path,
+            build_run_metadata(
+                config=config,
+                pipeline_config=pipeline_config,
+                subtitle_source=subtitle_source,
+                prompt_version=prompt_version,
+                system_prompt=system_prompt,
+                strategy_prompt_defaults=strategy_prompt_defaults,
+                started_at=started_at,
+                total_count=len(manifest_rows),
+                success_count=success_count,
+                error_count=error_count,
+                inference_durations=inference_durations,
+                finished_at=finished_at,
+            ),
+        )
+
+    write_metadata()
 
     for row in manifest_rows:
         grid_record = build_grid_record(config.grid_run_dir, row)
@@ -310,7 +347,9 @@ async def run_inference(config: RunConfig) -> Path:
         )
         inference_started_at = datetime.now().isoformat(timespec="seconds")
         inference_started_perf = time.perf_counter()
-        completion = await client.analyze(config.model, prompt_context)
+        
+        completion = await client.analyze(scene_model_alias, prompt_context, pipeline_config)
+        
         inference_duration_sec = time.perf_counter() - inference_started_perf
         inference_finished_at = datetime.now().isoformat(timespec="seconds")
         inference_durations.append(inference_duration_sec)
@@ -333,38 +372,13 @@ async def run_inference(config: RunConfig) -> Path:
             success_count += 1
         else:
             error_count += 1
-        write_json(
-            run_metadata_path,
-            build_run_metadata(
-                config=config,
-                subtitle_source=subtitle_source,
-                prompt_version=prompt_version,
-                system_prompt=system_prompt,
-                strategy_prompt_defaults=strategy_prompt_defaults,
-                started_at=started_at,
-                total_count=len(manifest_rows),
-                success_count=success_count,
-                error_count=error_count,
-                inference_durations=inference_durations,
-            ),
-        )
+        write_metadata()
         LOGGER.info(
             "Processed %s with strategy %s", grid_record.grid_filename, config.strategy
         )
 
-    run_metadata = build_run_metadata(
-        config=config,
-        subtitle_source=subtitle_source,
-        prompt_version=prompt_version,
-        system_prompt=system_prompt,
-        strategy_prompt_defaults=strategy_prompt_defaults,
-        started_at=started_at,
-        total_count=len(manifest_rows),
-        success_count=success_count,
-        error_count=error_count,
-        inference_durations=inference_durations,
-        finished_at=datetime.now().isoformat(timespec="seconds"),
-    )
+    write_metadata(finished_at=datetime.now().isoformat(timespec="seconds"))
+    run_metadata = json.loads(run_metadata_path.read_text(encoding="utf-8"))
     run_metadata["run_duration_sec"] = time.perf_counter() - run_started_perf
     write_json(run_metadata_path, run_metadata)
     return run_dir

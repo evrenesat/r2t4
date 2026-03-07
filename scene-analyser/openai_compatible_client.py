@@ -13,12 +13,12 @@ from typing import Any
 from json_repair import repair_json
 
 from context_strategies import PromptContext
+from pipeline_config import ConfigError, PipelineConfig
 
 CONTENT_TYPE_HEADER = "application/json"
 DEFAULT_REQUEST_TIMEOUT_SEC = 180
 DEFAULT_TEMPERATURE = 0.0
 DEFAULT_MAX_RETRIES = 1
-
 
 @dataclass(frozen=True)
 class CompletionSuccess:
@@ -29,7 +29,6 @@ class CompletionSuccess:
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
-
 
 @dataclass(frozen=True)
 class CompletionFailure:
@@ -42,45 +41,58 @@ class CompletionFailure:
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
 
-
 class OpenAICompatibleClient:
-    def __init__(
-        self,
-        chat_completions_url: str,
-        timeout_sec: int = DEFAULT_REQUEST_TIMEOUT_SEC,
-    ) -> None:
-        self._chat_completions_url = chat_completions_url
+    def __init__(self, timeout_sec: int = DEFAULT_REQUEST_TIMEOUT_SEC) -> None:
         self._timeout_sec = timeout_sec
+
+    def _validate_provider(self, api_url: str, api_name: str, model_alias: str) -> None:
+        non_compatible_keywords = ["anthropic.com", "generativelanguage.googleapis.com"]
+        if any(kw in api_url for kw in non_compatible_keywords):
+            raise ConfigError(
+                f"Non-OpenAI-compatible provider selected. Model alias '{model_alias}' "
+                f"uses API section '{api_name}' which is not supported by this client."
+            )
 
     async def analyze(
         self,
-        model: str,
+        model_alias: str,
         prompt_context: PromptContext,
+        config: PipelineConfig,
     ) -> CompletionSuccess | CompletionFailure:
         return await self.generate_json(
-            model=model,
+            model_alias=model_alias,
             system_prompt=prompt_context.system_prompt,
             user_text=prompt_context.user_text,
+            config=config,
             image_path=Path(prompt_context.image_path),
         )
 
     async def generate_json(
         self,
-        model: str,
+        model_alias: str,
         system_prompt: str,
         user_text: str,
+        config: PipelineConfig,
         image_path: Path | None = None,
     ) -> CompletionSuccess | CompletionFailure:
+        resolved_model = config.resolve_model(model_alias)
+        self._validate_provider(resolved_model.api_url, resolved_model.api_name, model_alias)
+        
         retry_count = 0
         while True:
             try:
                 payload = self._build_payload(
-                    model=model,
+                    model_id=resolved_model.id,
                     system_prompt=system_prompt,
                     user_text=user_text,
-                    image_path=image_path,
+                    image_path=image_path if resolved_model.image_support else None,
                 )
-                response = await asyncio.to_thread(self._post_payload, payload)
+                response = await asyncio.to_thread(
+                    self._post_payload, 
+                    payload, 
+                    resolved_model.api_url, 
+                    resolved_model.api_key
+                )
                 raw_text = extract_message_text(response)
             except urllib.error.HTTPError as error:
                 body = error.read().decode("utf-8", errors="replace")
@@ -121,7 +133,7 @@ class OpenAICompatibleClient:
 
     def _build_payload(
         self,
-        model: str,
+        model_id: str,
         system_prompt: str,
         user_text: str,
         image_path: Path | None = None,
@@ -142,7 +154,7 @@ class OpenAICompatibleClient:
                 }
             )
         return {
-            "model": model,
+            "model": model_id,
             "temperature": DEFAULT_TEMPERATURE,
             "messages": [
                 {
@@ -156,11 +168,15 @@ class OpenAICompatibleClient:
             ],
         }
 
-    def _post_payload(self, payload: dict[str, object]) -> dict[str, Any]:
+    def _post_payload(self, payload: dict[str, object], url: str, api_key: str) -> dict[str, Any]:
+        headers = {"Content-Type": CONTENT_TYPE_HEADER}
+        if api_key:
+            headers["Authorization"] = f"Bearer {api_key}"
+            
         request = urllib.request.Request(
-            self._chat_completions_url,
+            url,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": CONTENT_TYPE_HEADER},
+            headers=headers,
             method="POST",
         )
         with urllib.request.urlopen(request, timeout=self._timeout_sec) as response:
@@ -191,7 +207,7 @@ def extract_message_text(response_payload: dict[str, Any]) -> str:
     raise ValueError(f"Unsupported message content type: {type(content)!r}")
 
 
-def parse_model_json(raw_text: str) -> dict[str, object]:
+def parse_model_json(raw_text: str) -> dict[str, Any]:
     try:
         parsed = json.loads(raw_text)
         if isinstance(parsed, dict):

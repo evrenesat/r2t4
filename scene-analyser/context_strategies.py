@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Protocol
@@ -32,6 +34,15 @@ BOUNDED_MEMORY_TEMPLATE = (
     "Carry-forward state from prior successful scene analyses:\n{carry_forward_state}"
 )
 BOUNDED_MEMORY_PROMPT_LABEL = "image_with_bounded_subtitle_memory_v1"
+PRECOMPUTED_MEMORY_TEMPLATE = (
+    "Analyze the provided movie scene grid as a single chronological scene.\n"
+    "Scene timing: {chunk_start:.1f}s to {chunk_end:.1f}s.\n"
+    "Use the image as the primary evidence.\n"
+    "Use the provided subtitle summary and recent subtitles only as supporting narrative context.\n"
+    "Older subtitle summary:\n{older_subtitle_summary}\n\n"
+    "Recent exact subtitles from the last three scene windows:\n{recent_raw_subtitles}"
+)
+PRECOMPUTED_MEMORY_PROMPT_LABEL = "image_with_precomputed_subtitle_context_v1"
 
 
 @dataclass(frozen=True)
@@ -56,6 +67,10 @@ class PromptContext:
 class StrategyState:
     subtitle_accumulator: SubtitleAccumulator | None = None
     bounded_scene_memory: BoundedSceneMemory | None = None
+    precomputed_summaries: dict[str, dict[str, Any]] | None = None
+    precomputed_summaries_path: Path | None = None
+    precomputed_row_poll_interval_sec: float = 0.2
+    precomputed_row_wait_timeout_sec: float = 300.0
 
 
 class ContextStrategy(Protocol):
@@ -205,8 +220,8 @@ class ImageWithBoundedSubtitleMemoryStrategy:
         )
 
 
-class FutureSubtitleSummaryStrategy:
-    name = "image_with_subtitle_summary"
+class ImageWithPrecomputedSubtitleContextStrategy:
+    name = "image_with_precomputed_subtitle_context"
 
     async def build_context(
         self,
@@ -214,7 +229,47 @@ class FutureSubtitleSummaryStrategy:
         state: StrategyState,
         system_prompt: str,
     ) -> PromptContext:
-        raise NotImplementedError("Subtitle summary context is reserved for a later iteration.")
+        if state.precomputed_summaries is None:
+            raise ValueError("The precomputed subtitle context strategy requires precomputed summaries.")
+        summary_row = await wait_for_precomputed_summary_row(state, grid_record.grid_filename)
+        if not summary_row:
+            older_summary = "No precomputed summary available."
+            recent_raw = "No recent subtitles available."
+            mode = "missing"
+        else:
+            older_summary = summary_row.get("summary_text", "") or "(No summary available.)"
+            recent_raw = summary_row.get("recent_raw_subtitles", "") or "(No recent subtitles.)"
+            mode = str(summary_row.get("status", "precomputed"))
+            
+        return PromptContext(
+            strategy=self.name,
+            system_prompt=system_prompt,
+            user_prompt_label=PRECOMPUTED_MEMORY_PROMPT_LABEL,
+            user_text=PRECOMPUTED_MEMORY_TEMPLATE.format(
+                chunk_start=grid_record.chunk_start,
+                chunk_end=grid_record.chunk_end,
+                older_subtitle_summary=older_summary,
+                recent_raw_subtitles=recent_raw,
+            ),
+            image_path=grid_record.grid_path,
+            subtitle_context={
+                "mode": mode,
+                "summary_available": bool(summary_row and summary_row.get("summary_text")),
+                "recent_raw_available": bool(summary_row and summary_row.get("recent_raw_subtitles")),
+                "summary_cutoff_second": (
+                    summary_row.get("summary_cutoff_second") if summary_row else None
+                ),
+            },
+        )
+
+    def record_result(
+        self,
+        grid_record: GridRecord,
+        state: StrategyState,
+        analysis: dict[str, Any] | None,
+        error: dict[str, Any] | None,
+    ) -> None:
+        pass
 
 
 class FuturePriorAnalysisStrategy:
@@ -244,6 +299,7 @@ def get_strategy(name: str) -> ContextStrategy:
         ImageOnlyStrategy.name: ImageOnlyStrategy(),
         ImageWithRawSubtitlesStrategy.name: ImageWithRawSubtitlesStrategy(),
         ImageWithBoundedSubtitleMemoryStrategy.name: ImageWithBoundedSubtitleMemoryStrategy(),
+        ImageWithPrecomputedSubtitleContextStrategy.name: ImageWithPrecomputedSubtitleContextStrategy(),
     }
     try:
         return strategies[name]
@@ -264,6 +320,10 @@ def get_strategy_prompt_defaults(name: str) -> dict[str, str]:
         ImageWithBoundedSubtitleMemoryStrategy.name: {
             "user_prompt_label": BOUNDED_MEMORY_PROMPT_LABEL,
             "user_prompt_template": BOUNDED_MEMORY_TEMPLATE,
+        },
+        ImageWithPrecomputedSubtitleContextStrategy.name: {
+            "user_prompt_label": PRECOMPUTED_MEMORY_PROMPT_LABEL,
+            "user_prompt_template": PRECOMPUTED_MEMORY_TEMPLATE,
         },
     }
     try:
@@ -295,3 +355,33 @@ def format_carry_forward_state(carry_forward_state: dict[str, Any]) -> str:
         f"Latest label snapshot: {label_snapshot or 'None'}",
     ]
     return "\n".join(sections)
+
+
+async def wait_for_precomputed_summary_row(
+    state: StrategyState,
+    grid_filename: str,
+) -> dict[str, Any] | None:
+    deadline = time.monotonic() + state.precomputed_row_wait_timeout_sec
+    while True:
+        summary_row = state.precomputed_summaries.get(grid_filename)
+        if summary_row is not None:
+            return summary_row
+        refresh_precomputed_summaries(state)
+        summary_row = state.precomputed_summaries.get(grid_filename)
+        if summary_row is not None:
+            return summary_row
+        if state.precomputed_summaries_path is None or time.monotonic() >= deadline:
+            return None
+        await asyncio.sleep(state.precomputed_row_poll_interval_sec)
+
+
+def refresh_precomputed_summaries(state: StrategyState) -> None:
+    if state.precomputed_summaries is None or state.precomputed_summaries_path is None:
+        return
+    if not state.precomputed_summaries_path.exists():
+        return
+    for line in state.precomputed_summaries_path.read_text(encoding="utf-8").splitlines():
+        if not line.strip():
+            continue
+        row = json.loads(line)
+        state.precomputed_summaries[str(row["grid_filename"])] = row

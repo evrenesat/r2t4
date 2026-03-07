@@ -8,7 +8,9 @@ from unittest.mock import patch
 from subtitle_ingestion import SubtitleAccumulator, parse_ass_subtitles
 from subtitle_ingestion import (
     SUBTITLE_CATALOG_FILENAME,
+    NORMALIZED_TRANSCRIPT_FILENAME,
     SUBTITLES_DIRNAME,
+    build_normalized_subtitle_transcript,
     export_available_subtitles,
     export_embedded_subtitles,
     load_subtitles,
@@ -51,6 +53,12 @@ class SubtitleIngestionTests(unittest.TestCase):
         self.assertEqual(first_meta["event_count"], 1)
         self.assertEqual(second_text, "Hello world\nWe should leave now.")
         self.assertEqual(second_meta["event_count"], 2)
+
+    def test_build_normalized_subtitle_transcript_uses_integer_start_seconds(self) -> None:
+        events = parse_ass_subtitles(ASS_SAMPLE)
+        transcript = build_normalized_subtitle_transcript(events)
+        self.assertEqual(transcript, "1 | Hello world\n6 | We should leave now.")
+        self.assertEqual(NORMALIZED_TRANSCRIPT_FILENAME, "normalized_transcript.txt")
 
     def test_export_and_reload_extracted_subtitles_prefers_english(self) -> None:
         with tempfile.TemporaryDirectory(dir="temp") as temp_dir:

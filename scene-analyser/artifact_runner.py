@@ -10,6 +10,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from pipeline_config import PipelineConfig, ResolvedModelConfig
 from openai_compatible_client import CompletionFailure, CompletionSuccess, OpenAICompatibleClient
 from research_context import load_research_context
 from subtitle_ingestion import load_subtitles
@@ -21,16 +22,14 @@ ARTIFACT_PROMPTS_PATH = Path("artifact_prompts.md")
 ARTIFACT_RUNS_DIRNAME = "artifact_runs"
 ARTIFACT_RUN_METADATA_FILENAME = "run.json"
 DEFAULT_ARTIFACT_MAX_VALIDATION_RETRIES = 2
-DEFAULT_CHAT_COMPLETIONS_URL = "http://localhost:1234/v1/chat/completions"
 
 
 @dataclass(frozen=True)
 class ArtifactRunConfig:
     inference_run_dir: Path
-    model: str
-    chat_completions_url: str | None
+    config_path: Path
+    profile: str
     title_name: str | None
-    asky_model_alias: str | None
     asky_research_source_mode: str | None
     max_validation_retries: int
     allow_partial_analysis: bool
@@ -41,10 +40,9 @@ def parse_args() -> ArtifactRunConfig:
         description="Generate a Timed Descriptive Transcript from one completed inference run."
     )
     parser.add_argument("--inference-run-dir", required=True)
-    parser.add_argument("--model", required=True)
-    parser.add_argument("--chat-completions-url")
+    parser.add_argument("--config", default="config/pipeline.toml")
+    parser.add_argument("--profile", default="default")
     parser.add_argument("--title-name")
-    parser.add_argument("--asky-model-alias")
     parser.add_argument("--asky-research-source-mode")
     parser.add_argument(
         "--max-validation-retries",
@@ -55,10 +53,9 @@ def parse_args() -> ArtifactRunConfig:
     args = parser.parse_args()
     return ArtifactRunConfig(
         inference_run_dir=Path(args.inference_run_dir),
-        model=args.model,
-        chat_completions_url=args.chat_completions_url,
+        config_path=Path(args.config),
+        profile=args.profile,
         title_name=args.title_name,
-        asky_model_alias=args.asky_model_alias,
         asky_research_source_mode=args.asky_research_source_mode,
         max_validation_retries=args.max_validation_retries,
         allow_partial_analysis=args.allow_partial_analysis,
@@ -90,15 +87,15 @@ def load_artifact_prompt(prompts_path: Path = ARTIFACT_PROMPTS_PATH) -> tuple[st
     return prompt_text, f"artifact_prompts_md_{digest}"
 
 
-def create_artifact_run_dir(inference_run_dir: Path, model: str) -> Path:
+def create_artifact_run_dir(inference_run_dir: Path, model_id: str) -> Path:
     base_dir = inference_run_dir / ARTIFACT_RUNS_DIRNAME
     base_dir.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    run_dir = base_dir / f"{timestamp}_timed_descriptive_transcript_{sanitize_slug(model)}"
+    run_dir = base_dir / f"{timestamp}_timed_descriptive_transcript_{sanitize_slug(model_id)}"
     variant = 2
     while run_dir.exists():
         run_dir = base_dir / (
-            f"{timestamp}_timed_descriptive_transcript_{sanitize_slug(model)}_v{variant}"
+            f"{timestamp}_timed_descriptive_transcript_{sanitize_slug(model_id)}_v{variant}"
         )
         variant += 1
     run_dir.mkdir()
@@ -154,7 +151,7 @@ def build_artifact_input_bundle(
             "grid_run_dir": source_run_metadata.get("grid_run_dir"),
             "video_path": source_run_metadata.get("video_path"),
             "strategy": source_run_metadata.get("strategy"),
-            "model": source_run_metadata.get("model"),
+            "model_aliases": source_run_metadata.get("model_aliases", {}),
             "subtitle_source": source_run_metadata.get("subtitle_source"),
             "selection_window": source_run_metadata.get("selection_window"),
         },
@@ -217,7 +214,10 @@ def build_artifact_run_metadata(
     attempts: list[dict[str, Any]],
     status: str,
     artifact_path: str | None,
+    artifact_model_config: ResolvedModelConfig,
+    pipeline_config: PipelineConfig,
 ) -> dict[str, Any]:
+    model_aliases = source_run_metadata.get("model_aliases", {})
     return {
         "format_name": TDT_FORMAT_NAME,
         "format": TDT_FORMAT_ID,
@@ -225,11 +225,12 @@ def build_artifact_run_metadata(
         "inference_run_dir": str(config.inference_run_dir),
         "source_grid_run_dir": source_run_metadata.get("grid_run_dir"),
         "source_strategy": source_run_metadata.get("strategy"),
-        "source_model": source_run_metadata.get("model"),
-        "artifact_model": config.model,
-        "chat_completions_url": config.chat_completions_url
-        or source_run_metadata.get("chat_completions_url")
-        or DEFAULT_CHAT_COMPLETIONS_URL,
+        "source_model_aliases": model_aliases,
+        "config_profile": config.profile,
+        "artifact_model_alias": pipeline_config.roles.get("artifact_model"),
+        "provider_api": artifact_model_config.api_name,
+        "artifact_model": artifact_model_config.id,
+        "chat_completions_url": artifact_model_config.api_url,
         "prompt_version": prompt_version,
         "research_context": research_context,
         "max_validation_retries": config.max_validation_retries,
@@ -241,6 +242,12 @@ def build_artifact_run_metadata(
 
 
 async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
+    pipeline_config = PipelineConfig(config.config_path, config.profile)
+    artifact_model_alias = pipeline_config.roles.get("artifact_model")
+    if not artifact_model_alias:
+        raise ValueError("Role 'artifact_model' is not configured.")
+    artifact_model_config = pipeline_config.resolve_model(artifact_model_alias)
+
     source_run_metadata = load_json(config.inference_run_dir / "run.json")
     result_rows = load_jsonl(config.inference_run_dir / "results.jsonl")
     expected_segments = collect_expected_segments(
@@ -263,9 +270,12 @@ async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
         subtitle_stream_index=subtitle_source.get("stream_index"),
     )
     subtitle_events = filter_subtitle_events_for_rows(subtitle_events, result_rows)
+    
+    asky_model_alias = pipeline_config.roles.get("research_model") or artifact_model_alias
+    
     research_context = load_research_context(
         title_name=title_name,
-        asky_model_alias=config.asky_model_alias,
+        asky_model_alias=asky_model_alias,
         asky_research_source_mode=config.asky_research_source_mode,
     ).to_dict()
     prompt_text, prompt_version = load_artifact_prompt()
@@ -276,13 +286,11 @@ async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
         title_name=title_name,
         research_context=research_context,
     )
-    run_dir = create_artifact_run_dir(config.inference_run_dir, config.model)
+    run_dir = create_artifact_run_dir(config.inference_run_dir, artifact_model_config.id)
     run_metadata_path = run_dir / ARTIFACT_RUN_METADATA_FILENAME
-    client = OpenAICompatibleClient(
-        config.chat_completions_url
-        or source_run_metadata.get("chat_completions_url")
-        or DEFAULT_CHAT_COMPLETIONS_URL
-    )
+    
+    client = OpenAICompatibleClient()
+    
     attempts: list[dict[str, Any]] = []
     previous_errors: list[str] | None = None
     artifact_path = run_dir / TDT_FILENAME
@@ -296,14 +304,17 @@ async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
             attempts=attempts,
             status="running",
             artifact_path=None,
+            artifact_model_config=artifact_model_config,
+            pipeline_config=pipeline_config,
         ),
     )
     max_attempts = config.max_validation_retries + 1
     for attempt_number in range(1, max_attempts + 1):
         completion = await client.generate_json(
-            model=config.model,
+            model_alias=artifact_model_alias,
             system_prompt=prompt_text,
             user_text=build_artifact_user_text(input_bundle, previous_errors),
+            config=pipeline_config,
         )
         attempt_record = {"attempt": attempt_number}
         if isinstance(completion, CompletionFailure):
@@ -326,6 +337,8 @@ async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
                     attempts=attempts,
                     status="running",
                     artifact_path=None,
+                    artifact_model_config=artifact_model_config,
+                    pipeline_config=pipeline_config,
                 ),
             )
             continue
@@ -334,8 +347,10 @@ async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
         if not validation_errors:
             candidate["generation"] = {
                 **(candidate.get("generation", {}) if isinstance(candidate.get("generation"), dict) else {}),
-                "artifact_model": config.model,
-                "source_inference_model": source_run_metadata.get("model"),
+                "artifact_model": artifact_model_config.id,
+                "artifact_model_alias": artifact_model_alias,
+                "provider_api": artifact_model_config.api_name,
+                "source_inference_model_aliases": source_run_metadata.get("model_aliases", {}),
                 "source_subtitle_source": loaded_subtitle_source.to_dict(),
                 "prompt_version": prompt_version,
                 "generated_at": datetime.now().isoformat(timespec="seconds"),
@@ -359,6 +374,8 @@ async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
                     attempts=attempts,
                     status="completed",
                     artifact_path=str(artifact_path),
+                    artifact_model_config=artifact_model_config,
+                    pipeline_config=pipeline_config,
                 ),
             )
             return run_dir
@@ -381,6 +398,8 @@ async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
                 attempts=attempts,
                 status="running",
                 artifact_path=None,
+                artifact_model_config=artifact_model_config,
+                pipeline_config=pipeline_config,
             ),
         )
     write_json(
@@ -393,11 +412,14 @@ async def run_artifact_generation(config: ArtifactRunConfig) -> Path:
             attempts=attempts,
             status="failed",
             artifact_path=None,
+            artifact_model_config=artifact_model_config,
+            pipeline_config=pipeline_config,
         ),
     )
     raise ValueError(
-        "Artifact generation failed validation after "
-        f"{max_attempts} attempts: {previous_errors or ['unknown error']}"
+        f"Artifact generation failed validation after "
+        f"{max_attempts} attempts: {previous_errors or ['unknown error']} "
+        f"(provider: {artifact_model_config.api_name}, alias: {artifact_model_alias})"
     )
 
 

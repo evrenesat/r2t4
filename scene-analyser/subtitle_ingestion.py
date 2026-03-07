@@ -37,6 +37,7 @@ LEADING_MUSIC_PATTERN = re.compile(r"^[♪♩♫]+\s*")
 WHITESPACE_PATTERN = re.compile(r"\s+")
 SUBTITLES_DIRNAME = "subtitles"
 SUBTITLE_CATALOG_FILENAME = "catalog.json"
+NORMALIZED_TRANSCRIPT_FILENAME = "normalized_transcript.txt"
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,28 @@ class SubtitleAccumulator:
             "last_event_end": self._last_event_end,
             "context_end": timestamp,
         }
+
+
+def subtitle_start_second(event: SubtitleEvent) -> int:
+    return max(0, int(event.start))
+
+
+def format_normalized_subtitle_line(event: SubtitleEvent) -> str:
+    return f"{subtitle_start_second(event)} | {event.text}"
+
+
+def build_normalized_subtitle_transcript(events: list[SubtitleEvent]) -> str:
+    ordered_events = sorted(events, key=lambda event: (event.start, event.end))
+    return "\n".join(format_normalized_subtitle_line(event) for event in ordered_events)
+
+
+def write_normalized_subtitle_transcript(
+    events: list[SubtitleEvent],
+    output_path: Path,
+) -> str:
+    transcript = build_normalized_subtitle_transcript(events)
+    output_path.write_text(transcript, encoding="utf-8")
+    return transcript
 
 
 def load_subtitles(

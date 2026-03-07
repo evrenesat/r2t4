@@ -1,3 +1,6 @@
+from __future__ import annotations
+
+import argparse
 import concurrent.futures
 import hashlib
 import json
@@ -5,6 +8,7 @@ import os
 import re
 import subprocess
 import time
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -18,10 +22,8 @@ from frame_selector import (
     derive_thresholds,
     select_chunk_frames,
 )
+from pipeline_config import PipelineConfig
 from subtitle_ingestion import SUBTITLES_DIRNAME, export_available_subtitles
-
-VIDEO_PATH = "/Volumes/DEPO/r2d4-test/movies/DexterOriginalSin-S01E03-MiamiVice.mkv"
-OUTPUT_DIR = "output"
 
 PRESETS = {
     "balanced": {
@@ -56,18 +58,6 @@ PRESETS = {
     },
 }
 
-PRESET = "balanced"
-SCENE_THRESHOLD = PRESETS[PRESET]["SCENE_THRESHOLD"]
-ANALYSIS_FPS = PRESETS[PRESET]["ANALYSIS_FPS"]
-ANALYSIS_WIDTH = PRESETS[PRESET]["ANALYSIS_WIDTH"]
-MIN_CHUNK_SEC = PRESETS[PRESET]["MIN_CHUNK_SEC"]
-MAX_CHUNK_SEC = PRESETS[PRESET]["MAX_CHUNK_SEC"]
-CUT_MERGE_SEC = PRESETS[PRESET]["CUT_MERGE_SEC"]
-MIN_FRAME_DISTANCE = PRESETS[PRESET]["MIN_FRAME_DISTANCE"]
-BLACK_FRAME_LUMA_THRESHOLD = PRESETS[PRESET]["BLACK_FRAME_LUMA_THRESHOLD"]
-ENABLE_DIAGNOSTICS = True
-ALLOW_SUBLIMINAL_DOWNLOAD = True
-
 GRID_COLS = 2
 GRID_ROWS = 2
 MAX_EDGE = 512
@@ -75,19 +65,50 @@ MAX_WORKERS = 4
 GRIDS_DIRNAME = "grids"
 
 
-def runtime_config() -> dict[str, Any]:
+@dataclass(frozen=True)
+class ExtractorRunConfig:
+    config_path: Path
+    profile: str
+    video_path: Path | None
+
+
+def parse_args() -> ExtractorRunConfig:
+    parser = argparse.ArgumentParser(description="Extract scene grids from a title.")
+    parser.add_argument("--config", default="config/pipeline.toml")
+    parser.add_argument("--profile", default="default")
+    parser.add_argument("--video-path")
+    args = parser.parse_args()
+    return ExtractorRunConfig(
+        config_path=Path(args.config),
+        profile=args.profile,
+        video_path=Path(args.video_path) if args.video_path else None,
+    )
+
+
+def runtime_config(
+    pipeline_config: PipelineConfig,
+    video_path_override: Path | None,
+) -> dict[str, Any]:
+    preset_name = pipeline_config.extractor_config.preset
+    try:
+        preset = PRESETS[preset_name]
+    except KeyError as error:
+        raise ValueError(f"Unknown preset '{preset_name}'.") from error
     return {
-        "PRESET": PRESET,
-        "SCENE_THRESHOLD": SCENE_THRESHOLD,
-        "ANALYSIS_FPS": ANALYSIS_FPS,
-        "ANALYSIS_WIDTH": ANALYSIS_WIDTH,
-        "MIN_CHUNK_SEC": MIN_CHUNK_SEC,
-        "MAX_CHUNK_SEC": MAX_CHUNK_SEC,
-        "CUT_MERGE_SEC": CUT_MERGE_SEC,
-        "MIN_FRAME_DISTANCE": MIN_FRAME_DISTANCE,
-        "BLACK_FRAME_LUMA_THRESHOLD": BLACK_FRAME_LUMA_THRESHOLD,
-        "ENABLE_DIAGNOSTICS": ENABLE_DIAGNOSTICS,
-        "ALLOW_SUBLIMINAL_DOWNLOAD": ALLOW_SUBLIMINAL_DOWNLOAD,
+        "VIDEO_PATH": str(pipeline_config.resolve_video_path(video_path_override)),
+        "OUTPUT_DIR": pipeline_config.extractor_config.output_dir,
+        "PRESET": preset_name,
+        "SCENE_THRESHOLD": preset["SCENE_THRESHOLD"],
+        "ANALYSIS_FPS": preset["ANALYSIS_FPS"],
+        "ANALYSIS_WIDTH": preset["ANALYSIS_WIDTH"],
+        "MIN_CHUNK_SEC": preset["MIN_CHUNK_SEC"],
+        "MAX_CHUNK_SEC": preset["MAX_CHUNK_SEC"],
+        "CUT_MERGE_SEC": preset["CUT_MERGE_SEC"],
+        "MIN_FRAME_DISTANCE": preset["MIN_FRAME_DISTANCE"],
+        "BLACK_FRAME_LUMA_THRESHOLD": preset["BLACK_FRAME_LUMA_THRESHOLD"],
+        "ENABLE_DIAGNOSTICS": pipeline_config.extractor_config.enable_diagnostics,
+        "ALLOW_SUBLIMINAL_DOWNLOAD": pipeline_config.subtitle_ingestion_config.allow_subliminal_download,
+        "SUBTITLE_LANGUAGE": pipeline_config.subtitle_ingestion_config.subtitle_language,
     }
 
 
@@ -281,10 +302,11 @@ def write_manifest_line(handle: Any, record: dict[str, Any]) -> None:
     handle.write(json.dumps(record, ensure_ascii=True) + "\n")
 
 
-def process_video() -> None:
-    ensure_output_dir(OUTPUT_DIR)
-    config = runtime_config()
-    run_output_dir = make_run_output_dir(OUTPUT_DIR, config["PRESET"])
+def process_video(run_config: ExtractorRunConfig) -> None:
+    pipeline_config = PipelineConfig(run_config.config_path, run_config.profile)
+    config = runtime_config(pipeline_config, run_config.video_path)
+    ensure_output_dir(str(config["OUTPUT_DIR"]))
+    run_output_dir = make_run_output_dir(str(config["OUTPUT_DIR"]), str(config["PRESET"]))
     grids_output_dir = os.path.join(run_output_dir, GRIDS_DIRNAME)
     subtitles_output_dir = os.path.join(run_output_dir, SUBTITLES_DIRNAME)
     ensure_output_dir(grids_output_dir)
@@ -293,41 +315,47 @@ def process_video() -> None:
 
     phase_timings: dict[str, float] = {
         "duration_lookup": 0.0,
-        "scene_cut_probe": 0.0,
-        "subtitle_export": 0.0,
-        "low_res_analysis": 0.0,
+        "parallel_analysis": 0.0,
         "chunk_building": 0.0,
         "full_res_extraction": 0.0,
         "grid_writing": 0.0,
+        "summary_precompute": 0.0,
     }
 
     started = time.perf_counter()
-    total_duration = get_video_duration(VIDEO_PATH)
+    total_duration = get_video_duration(str(config["VIDEO_PATH"]))
     phase_timings["duration_lookup"] = time.perf_counter() - started
 
     started = time.perf_counter()
-    scene_cuts = get_scene_changes(VIDEO_PATH, OUTPUT_DIR, config["SCENE_THRESHOLD"])
+    with concurrent.futures.ThreadPoolExecutor(max_workers=3) as executor:
+        future_scenes = executor.submit(
+            get_scene_changes,
+            str(config["VIDEO_PATH"]),
+            str(config["OUTPUT_DIR"]),
+            float(config["SCENE_THRESHOLD"]),
+        )
+        future_subs = executor.submit(
+            export_available_subtitles,
+            Path(str(config["VIDEO_PATH"])),
+            Path(subtitles_output_dir),
+            subtitle_language=str(config["SUBTITLE_LANGUAGE"]),
+            allow_subliminal_download=bool(config["ALLOW_SUBLIMINAL_DOWNLOAD"]),
+        )
+        future_frames = executor.submit(
+            analyze_video_lowres,
+            str(config["VIDEO_PATH"]),
+            float(config["ANALYSIS_FPS"]),
+            int(config["ANALYSIS_WIDTH"]),
+            float(config["BLACK_FRAME_LUMA_THRESHOLD"]),
+        )
+
+        scene_cuts = future_scenes.result()
+        exported_subtitles = future_subs.result()
+        analyzed_frames = future_frames.result()
+
     cut_regions = merge_scene_cuts(scene_cuts, config["CUT_MERGE_SEC"])
-    phase_timings["scene_cut_probe"] = time.perf_counter() - started
-
-    started = time.perf_counter()
-    exported_subtitles = export_available_subtitles(
-        Path(VIDEO_PATH),
-        Path(subtitles_output_dir),
-        subtitle_language="eng",
-        allow_subliminal_download=config["ALLOW_SUBLIMINAL_DOWNLOAD"],
-    )
-    phase_timings["subtitle_export"] = time.perf_counter() - started
-
-    started = time.perf_counter()
-    analyzed_frames = analyze_video_lowres(
-        VIDEO_PATH,
-        config["ANALYSIS_FPS"],
-        config["ANALYSIS_WIDTH"],
-        config["BLACK_FRAME_LUMA_THRESHOLD"],
-    )
     thresholds = derive_thresholds(analyzed_frames, config)
-    phase_timings["low_res_analysis"] = time.perf_counter() - started
+    phase_timings["parallel_analysis"] = time.perf_counter() - started
 
     started = time.perf_counter()
     chunks = build_adaptive_chunks(
@@ -339,6 +367,36 @@ def process_video() -> None:
         thresholds,
     )
     phase_timings["chunk_building"] = time.perf_counter() - started
+
+    from subtitle_ingestion import load_subtitles
+    try:
+        _, subtitle_events = load_subtitles(
+            video_path=Path(str(config["VIDEO_PATH"])),
+            grid_run_dir=Path(run_output_dir),
+            subtitle_language=str(config["SUBTITLE_LANGUAGE"]),
+            subtitle_stream_index=pipeline_config.subtitle_ingestion_config.subtitle_stream_index,
+            allow_subliminal_download=bool(config["ALLOW_SUBLIMINAL_DOWNLOAD"]),
+        )
+    except ValueError as error:
+        print(f"Warning: {error}")
+        subtitle_events = []
+
+    from subtitle_summary_precompute import ChunkWindow, precompute_summaries
+
+    summary_chunks = [
+        ChunkWindow(chunk_index=chunk.chunk_index, start=chunk.start, end=chunk.end)
+        for chunk in chunks
+    ]
+    
+    summary_executor = concurrent.futures.ThreadPoolExecutor(max_workers=1)
+    summary_started = time.perf_counter()
+    summary_future = summary_executor.submit(
+        precompute_summaries,
+        subtitle_events,
+        summary_chunks,
+        pipeline_config,
+        Path(run_output_dir),
+    )
 
     manifest_path = os.path.join(run_output_dir, "manifest.jsonl")
     diagnostics_path = os.path.join(run_output_dir, "diagnostics.json")
@@ -369,7 +427,12 @@ def process_video() -> None:
                     temp_path = os.path.join(run_output_dir, f"temp_chunk{chunk.chunk_index}_frame{frame_idx}.jpg")
                     temp_images.append(temp_path)
                     futures.append(
-                        executor.submit(extract_frame, VIDEO_PATH, selected.timestamp, temp_path)
+                        executor.submit(
+                            extract_frame,
+                            str(config["VIDEO_PATH"]),
+                            selected.timestamp,
+                            temp_path,
+                        )
                     )
                 concurrent.futures.wait(futures)
                 for future in futures:
@@ -400,6 +463,8 @@ def process_video() -> None:
                 },
             )
 
+    print("Grid writing completed.")
+
     diagnostics_summary = build_diagnostics_summary(
         chunks=chunks,
         thresholds=thresholds,
@@ -410,6 +475,7 @@ def process_video() -> None:
     diagnostics_payload.update(
         {
             "video_duration": total_duration,
+            "video_path": str(config["VIDEO_PATH"]),
             "analysis_fps": config["ANALYSIS_FPS"],
             "grid_count": len(chunks),
             "phase_timings_sec": phase_timings,
@@ -420,6 +486,8 @@ def process_video() -> None:
             "exported_subtitle_count": len(exported_subtitles),
             "exported_subtitles": [subtitle.to_dict() for subtitle in exported_subtitles],
             "merged_cut_region_count": len(cut_regions),
+            "config_profile": pipeline_config.profile_name,
+            "summary_gate": pipeline_config.execution_config.summary_gate,
         }
     )
 
@@ -427,6 +495,15 @@ def process_video() -> None:
         with open(diagnostics_path, "w", encoding="utf-8") as diagnostics_handle:
             json.dump(diagnostics_payload, diagnostics_handle, indent=2)
 
+    summary_future.result()
+    phase_timings["summary_precompute"] = time.perf_counter() - summary_started
+    print("Summary precomputation finished.")
+    summary_executor.shutdown(wait=True)
+
+
+def main() -> None:
+    process_video(parse_args())
+
 
 if __name__ == "__main__":
-    process_video()
+    main()
