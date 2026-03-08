@@ -6,6 +6,7 @@ const {
   parseNetflixMemberApiMetadata,
   parseNetflixMemberApiMetadataWithDiagnostics,
   parseShowNameFromTabTitle,
+  promoteMovieMetadataWithTabTitle,
 } = require("../lib/metadata_parser.js");
 
 const SAMPLE_GRAPHQL_PAYLOAD = {
@@ -229,8 +230,44 @@ test("returns parser diagnostics for memberapi payloads", () => {
   assert.equal(diagnostics.candidates[0].score > 0, true);
   assert.equal(diagnostics.signals.hasSeriesEntityType, true);
   assert.equal(diagnostics.signals.hasSeriesCountField, false);
+  assert.equal(diagnostics.selectedCandidateSource, "combined");
   assert.deepEqual(diagnostics.signals.showContainerTitlesFound, ["Weeds"]);
   assert.deepEqual(diagnostics.signals.entityTypesFound, ["Episode"]);
+});
+
+test("promotes exact requested video to episode from payload-level show context", () => {
+  const diagnostics = parseNetflixMemberApiMetadataWithDiagnostics(
+    {
+      video: {
+        type: "show",
+        title: "Brooklyn Nine-Nine",
+        currentEpisode: {
+          videoId: 80011399,
+          title: "Captain Peralta",
+        },
+        episodes: [
+          {
+            videoId: 80004161,
+            title: "Pilot",
+          },
+        ],
+      },
+    },
+    "80011399",
+  );
+
+  assert.deepEqual(diagnostics.result, {
+    kind: "episode",
+    entityType: "Episode",
+    videoId: 80011399,
+    showTitle: "Brooklyn Nine-Nine",
+    movieTitle: null,
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: "Captain Peralta",
+  });
+  assert.equal(diagnostics.selectedCandidateSource, "context_promoted");
+  assert.equal(diagnostics.candidates.some((candidate) => candidate.source === "context_promoted"), true);
 });
 
 test("parses season and episode metadata from Netflix tab titles", () => {
@@ -275,6 +312,49 @@ test("promotes movie-like memberapi payloads to episodes from season-marked tab 
     episodeNumber: 18,
     episodeTitle: "The Man with the Bone",
   });
+});
+
+test("promotes stored movie metadata from useful Netflix tab titles", () => {
+  const promoted = promoteMovieMetadataWithTabTitle(
+    {
+      kind: "movie",
+      entityType: "Movie",
+      videoId: 701,
+      showTitle: null,
+      movieTitle: "The Man with the Bone",
+      seasonNumber: null,
+      episodeNumber: null,
+      episodeTitle: null,
+    },
+    "Bones S1:E18 The Man with the Bone | Netflix",
+  );
+
+  assert.deepEqual(promoted, {
+    source: "tab_title_promoted",
+    kind: "episode",
+    entityType: "Episode",
+    videoId: 701,
+    showTitle: "Bones",
+    movieTitle: null,
+    seasonNumber: 1,
+    episodeNumber: 18,
+    episodeTitle: "The Man with the Bone",
+  });
+});
+
+test("does not promote movie metadata from generic Netflix tab titles", () => {
+  const movieMetadata = {
+    kind: "movie",
+    entityType: "Movie",
+    videoId: 42,
+    showTitle: null,
+    movieTitle: "Roma",
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: null,
+  };
+
+  assert.equal(promoteMovieMetadataWithTabTitle(movieMetadata, "Netflix"), movieMetadata);
 });
 
 test("promotes movie-like memberapi payloads to episodes from colon-delimited tab titles", () => {

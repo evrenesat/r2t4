@@ -73,6 +73,29 @@ function createTabState(tab) {
   };
 }
 
+function normalizeProvisionalMetadata(provisionalMetadata) {
+  if (!provisionalMetadata || typeof provisionalMetadata !== "object") {
+    return null;
+  }
+  const metadata =
+    provisionalMetadata.metadata && typeof provisionalMetadata.metadata === "object"
+      ? provisionalMetadata.metadata
+      : null;
+  if (!metadata) {
+    return null;
+  }
+  return {
+    metadata,
+    requestKind: typeof provisionalMetadata.requestKind === "string" ? provisionalMetadata.requestKind : null,
+    requestUrl: typeof provisionalMetadata.requestUrl === "string" ? provisionalMetadata.requestUrl : "",
+    requestVideoId: provisionalMetadata.requestVideoId ? String(provisionalMetadata.requestVideoId) : null,
+    selectedCandidateSource:
+      typeof provisionalMetadata.selectedCandidateSource === "string"
+        ? provisionalMetadata.selectedCandidateSource
+        : null,
+  };
+}
+
 function normalizeSession(session) {
   if (!session || typeof session !== "object") {
     return null;
@@ -83,6 +106,7 @@ function normalizeSession(session) {
     watchUrl: typeof session.watchUrl === "string" ? session.watchUrl : "",
     tabTitle: typeof session.tabTitle === "string" ? session.tabTitle : "",
     metadata: session.metadata && typeof session.metadata === "object" ? session.metadata : null,
+    provisionalMetadata: normalizeProvisionalMetadata(session.provisionalMetadata),
     startedAt: typeof session.startedAt === "string" ? session.startedAt : new Date().toISOString(),
     closed: Boolean(session.closed),
     closedAt: typeof session.closedAt === "string" ? session.closedAt : null,
@@ -142,6 +166,7 @@ function createSession(tabState) {
     watchUrl: tabState.currentUrl,
     tabTitle: tabState.currentTabTitle,
     metadata: null,
+    provisionalMetadata: null,
     startedAt: new Date().toISOString(),
     closed: false,
     closedAt: null,
@@ -157,11 +182,23 @@ function getKnownNetflixTab(tabId) {
   return knownNetflixTabs.get(tabId) || null;
 }
 
+function isGenericTabTitle(tabTitle) {
+  return !namingApi.normalizeTabTitle(tabTitle);
+}
+
 function updateKnownNetflixTab(tabId, url, title) {
   if (typeof tabId !== "number") {
     return;
   }
-  const urlValue = typeof url === "string" ? url : "";
+  const existingKnownTab = getKnownNetflixTab(tabId);
+  const urlValue =
+    typeof url === "string" && url
+      ? url
+      : (existingKnownTab?.currentUrl || "");
+  if (!urlValue) {
+    knownNetflixTabs.delete(tabId);
+    return;
+  }
   try {
     const parsedUrl = new URL(urlValue);
     if (parsedUrl.hostname !== matcherApi.NETFLIX_HOSTNAME) {
@@ -172,10 +209,18 @@ function updateKnownNetflixTab(tabId, url, title) {
     knownNetflixTabs.delete(tabId);
     return;
   }
+  const nextWatchId = matcherApi.extractWatchIdFromUrl(urlValue);
+  const watchChanged = Boolean(existingKnownTab && existingKnownTab.watchId !== nextWatchId);
+  const titleValue =
+    typeof title === "string" && title
+      ? title
+      : watchChanged
+        ? ""
+        : (existingKnownTab?.tabTitle || "");
   knownNetflixTabs.set(tabId, {
     currentUrl: urlValue,
-    watchId: matcherApi.extractWatchIdFromUrl(urlValue),
-    tabTitle: typeof title === "string" ? title : "",
+    watchId: nextWatchId,
+    tabTitle: titleValue,
   });
 }
 
@@ -397,6 +442,7 @@ function buildDebugPayload(session) {
       watchId: session.watchId,
       tabTitle: session.tabTitle,
       metadata: session.metadata,
+      provisionalMetadata: session.provisionalMetadata,
     },
     debugEvents: session.debugEvents,
     assets: session.savedAssets,
@@ -562,6 +608,43 @@ function summarizeDiagnosticCandidates(candidates) {
   });
 }
 
+function diagnosticsShowEpisodeContext(diagnostics) {
+  if (!diagnostics || typeof diagnostics !== "object") {
+    return false;
+  }
+  const hasSeriesSignals =
+    Boolean(diagnostics.signals?.hasSeriesEntityType) ||
+    Boolean(diagnostics.signals?.hasSeriesCountField) ||
+    (Array.isArray(diagnostics.signals?.showContainerTitlesFound) && diagnostics.signals.showContainerTitlesFound.length > 0);
+  if (!hasSeriesSignals) {
+    return false;
+  }
+  return Array.isArray(diagnostics.candidates) && diagnostics.candidates.some((candidate) => {
+    return candidate.kind === "episode" && typeof candidate.showTitle === "string" && candidate.showTitle.trim();
+  });
+}
+
+function shouldDeferMetadataApplication(tabState, session, parsedMetadata, diagnostics) {
+  if (!parsedMetadata || parsedMetadata.kind !== "movie" || !isGenericTabTitle(session.tabTitle)) {
+    return false;
+  }
+  const hintedMetadataResult = applySeriesHintToMetadata(tabState, session, parsedMetadata);
+  if (hintedMetadataResult.inferred) {
+    return false;
+  }
+  return diagnosticsShowEpisodeContext(diagnostics);
+}
+
+function storeProvisionalMetadata(session, requestKind, requestUrl, parsedMetadata, requestVideoId, selectedCandidateSource) {
+  session.provisionalMetadata = {
+    metadata: parsedMetadata,
+    requestKind,
+    requestUrl,
+    requestVideoId: requestVideoId || null,
+    selectedCandidateSource: selectedCandidateSource || null,
+  };
+}
+
 function metadataFieldCount(metadata) {
   if (!metadata || typeof metadata !== "object") {
     return 0;
@@ -621,7 +704,8 @@ function chooseMetadataApplication(session, parsedMetadata, requestVideoId) {
   };
 }
 
-async function applyMetadataToSession(tabState, session, requestKind, requestUrl, parsedMetadata, requestVideoId) {
+async function applyMetadataToSession(tabState, session, requestKind, requestUrl, parsedMetadata, requestVideoId, options) {
+  const applyOptions = options && typeof options === "object" ? options : {};
   const hintedMetadataResult = applySeriesHintToMetadata(tabState, session, parsedMetadata);
   const candidateMetadata = hintedMetadataResult.metadata;
   const decision = chooseMetadataApplication(session, candidateMetadata, requestVideoId);
@@ -642,6 +726,7 @@ async function applyMetadataToSession(tabState, session, requestKind, requestUrl
     ...candidateMetadata,
     requestVideoId: requestVideoId || null,
   };
+  session.provisionalMetadata = null;
   const resolvedSeriesTitle = deriveSeriesTitleFromMetadata(session.metadata);
   tabState.seriesTitleHint = resolvedSeriesTitle;
   tabState.seriesHintWatchId = session.watchId;
@@ -651,14 +736,62 @@ async function applyMetadataToSession(tabState, session, requestKind, requestUrl
     stage: "metadata_applied",
     requestKind,
     url: requestUrl,
-    reason: decision.reason,
+    reason: applyOptions.reasonOverride || decision.reason,
     metadataKind: candidateMetadata.kind,
     videoId: candidateMetadata.videoId,
     requestVideoId: requestVideoId || null,
     inferredFromSeriesHint: hintedMetadataResult.inferred,
+    selectedCandidateSource: applyOptions.candidateSource || null,
   });
-  await flushSessionAssets(tabState, session);
+  if (!applyOptions.skipFlush) {
+    await flushSessionAssets(tabState, session);
+  }
   return true;
+}
+
+async function finalizeProvisionalMetadata(tabState, session, reason, options) {
+  const finalizeOptions = options && typeof options === "object" ? options : {};
+  const provisionalMetadata = session.provisionalMetadata;
+  if (!provisionalMetadata) {
+    return false;
+  }
+  let candidateMetadata = provisionalMetadata.metadata;
+  let candidateSource = provisionalMetadata.selectedCandidateSource;
+  if (!isGenericTabTitle(session.tabTitle)) {
+    const promotedMetadata = metadataApi.promoteMovieMetadataWithTabTitle(candidateMetadata, session.tabTitle);
+    if (promotedMetadata !== candidateMetadata) {
+      candidateMetadata = promotedMetadata;
+      candidateSource = promotedMetadata.source || "tab_title_promoted";
+      await appendSessionDebugEvent(tabState, session.sessionKey, {
+        stage: "metadata_promoted_from_tab_title",
+        requestKind: provisionalMetadata.requestKind,
+        url: provisionalMetadata.requestUrl,
+        reason,
+        tabTitle: session.tabTitle,
+        titleState: "useful",
+        videoId: candidateMetadata.videoId,
+        selectedCandidateSource: candidateSource,
+      });
+    }
+  }
+  const applied = await applyMetadataToSession(
+    tabState,
+    session,
+    provisionalMetadata.requestKind,
+    provisionalMetadata.requestUrl,
+    candidateMetadata,
+    provisionalMetadata.requestVideoId,
+    {
+      reasonOverride: reason,
+      candidateSource,
+      skipFlush: Boolean(finalizeOptions.skipFlush),
+    },
+  );
+  if (!applied && session.metadata) {
+    session.provisionalMetadata = null;
+    await persistTabState(tabState);
+  }
+  return applied;
 }
 
 function ensureActiveSession(tabState) {
@@ -741,6 +874,11 @@ function createPendingAssetRecord(session, kind, sourceUrl, language, bytes) {
 }
 
 async function flushSessionAssets(tabState, session) {
+  if (!session.metadata && session.provisionalMetadata && session.closed && session.openRequestCount === 0) {
+    await finalizeProvisionalMetadata(tabState, session, "session_closed_provisional_fallback", {
+      skipFlush: true,
+    });
+  }
   const canFinalize = Boolean(session.metadata) || (session.closed && session.openRequestCount === 0);
   if (!canFinalize || session.pendingAssets.length === 0) {
     return;
@@ -834,7 +972,13 @@ async function processGraphqlCapture(tabState, session, bodyText, bytes) {
 
 async function processMetadataCapture(tabState, session, requestEntry, bodyText, bytes) {
   const requestVideoId = matcherApi.extractMetadataVideoIdFromUrl(requestEntry.url);
-  const parsedMetadata = metadataApi.parseNetflixMemberApiMetadata(bodyText, requestVideoId, session.tabTitle);
+  const diagnostics = metadataApi.parseNetflixMemberApiMetadataWithDiagnostics(
+    bodyText,
+    requestVideoId,
+    session.tabTitle,
+  );
+  const parsedMetadata = diagnostics.result;
+  const titleState = isGenericTabTitle(session.tabTitle) ? "generic" : "useful";
   await appendSessionDebugEvent(tabState, session.sessionKey, {
     stage: "request_completed",
     requestKind: REQUEST_KIND_METADATA,
@@ -858,6 +1002,8 @@ async function processMetadataCapture(tabState, session, requestEntry, bodyText,
     stage: "metadata_attempt",
     requestKind: REQUEST_KIND_METADATA,
     url: requestEntry.url,
+    tabTitle: session.tabTitle,
+    titleState,
     kind: parsedMetadata.kind,
     videoId: parsedMetadata.videoId,
     showTitle: parsedMetadata.showTitle,
@@ -866,23 +1012,44 @@ async function processMetadataCapture(tabState, session, requestEntry, bodyText,
     seasonNumber: parsedMetadata.seasonNumber,
     episodeNumber: parsedMetadata.episodeNumber,
     requestVideoId: requestVideoId || null,
+    selectedCandidateSource: diagnostics.selectedCandidateSource || null,
   });
   if (parsedMetadata.kind === "movie") {
-    const diagnostics = metadataApi.parseNetflixMemberApiMetadataWithDiagnostics(
-      bodyText,
-      requestVideoId,
-      session.tabTitle,
-    );
     await appendSessionDebugEvent(tabState, session.sessionKey, {
       stage: "metadata_diagnostics",
       requestKind: REQUEST_KIND_METADATA,
       url: requestEntry.url,
       requestVideoId: requestVideoId || null,
+      tabTitle: session.tabTitle,
+      titleState,
+      selectedCandidateSource: diagnostics.selectedCandidateSource || null,
       payloadTopKeys: extractTopLevelPayloadKeys(bodyText),
       signals: diagnostics.signals,
       candidateCount: diagnostics.candidates.length,
       candidates: summarizeDiagnosticCandidates(diagnostics.candidates),
     });
+  }
+  if (shouldDeferMetadataApplication(tabState, session, parsedMetadata, diagnostics)) {
+    storeProvisionalMetadata(
+      session,
+      REQUEST_KIND_METADATA,
+      requestEntry.url,
+      parsedMetadata,
+      requestVideoId,
+      diagnostics.selectedCandidateSource,
+    );
+    await persistTabState(tabState);
+    await appendSessionDebugEvent(tabState, session.sessionKey, {
+      stage: "metadata_deferred",
+      requestKind: REQUEST_KIND_METADATA,
+      url: requestEntry.url,
+      reason: "awaiting_useful_tab_title",
+      tabTitle: session.tabTitle,
+      titleState,
+      requestVideoId: requestVideoId || null,
+      selectedCandidateSource: diagnostics.selectedCandidateSource || null,
+    });
+    return;
   }
   try {
     await applyMetadataToSession(
@@ -892,6 +1059,9 @@ async function processMetadataCapture(tabState, session, requestEntry, bodyText,
       requestEntry.url,
       parsedMetadata,
       requestVideoId,
+      {
+        candidateSource: diagnostics.selectedCandidateSource || null,
+      },
     );
   } catch (error) {
     logError(`Metadata application failed for tab ${tabState.tabId}`, error);
@@ -1250,7 +1420,7 @@ async function handleActionClicked(tab) {
 }
 
 async function handleTabUpdated(tabId, changeInfo, tab) {
-  updateKnownNetflixTab(tabId, tab?.url || changeInfo.url || "", tab?.title || "");
+  updateKnownNetflixTab(tabId, changeInfo.url || tab?.url || "", changeInfo.title || tab?.title || "");
   let tabState = captureTabStates.get(tabId) || null;
   let autoEnabled = false;
   if (!tabState && tab && (tab.url || "").startsWith("https://www.netflix.com/")) {
@@ -1306,7 +1476,12 @@ async function handleTabUpdated(tabId, changeInfo, tab) {
       stage: "tab_updated",
       requestKind: null,
       url: tabState.currentUrl,
+      tabTitle: tabState.currentTabTitle,
+      titleState: isGenericTabTitle(tabState.currentTabTitle) ? "generic" : "useful",
     });
+    if (activeSession.provisionalMetadata && !isGenericTabTitle(activeSession.tabTitle)) {
+      await finalizeProvisionalMetadata(tabState, activeSession, "useful_tab_title_available");
+    }
   } else {
     await appendGlobalDebugEvent({
       stage: "tab_updated",

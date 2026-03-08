@@ -1,5 +1,14 @@
 # Devlog
 
+## 2026-03-08 (spa title recovery and segmented episode slugs)
+
+- Fixed Netflix SPA title tracking so title-only tab updates no longer wipe the known watch URL, and watch changes clear stale titles instead of carrying the previous show name forward.
+- Added provisional memberapi metadata handling in `background.js`: ambiguous movie-like results with series context are now deferred until a useful tab title arrives or the session closes, preventing assets from being flushed into the wrong folder too early.
+- Added late tab-title promotion via `promoteMovieMetadataWithTabTitle` so deferred movie metadata can be upgraded to episode metadata once the watch tab exposes a usable title.
+- Added a context-promoted episode candidate in `lib/metadata_parser.js` so payload-level show context can be fused with the exact requested video when the exact node only exposes an episode title.
+- Changed episode folder slugs to use logical `__` separators between show / season-episode / episode title segments.
+- Added parser, naming, and background-session regression tests for context promotion, provisional metadata fallback, title-only updates, and segmented slugs.
+
 ## 2026-03-08 (memberapi episode fallback and diagnostics)
 
 - Fixed the series-hint regression in `background.js`: `deriveSeriesTitleFromMetadata` now trusts only `showTitle`, so a misclassified first episode no longer seeds later episodes with the previous episode name as the series title.

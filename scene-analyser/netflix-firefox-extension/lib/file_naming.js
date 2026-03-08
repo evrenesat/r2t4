@@ -11,6 +11,7 @@
   const LEADING_OR_TRAILING_HYPHENS_REGEX = /^-+|-+$/g;
   const FALLBACK_SLUG = "watch-unknown";
   const IGNORABLE_TAB_TITLES = new Set(["netflix"]);
+  const TITLE_SEGMENT_SEPARATOR = "__";
 
   function normalizeSegment(value) {
     return String(value).padStart(2, "0");
@@ -49,6 +50,20 @@
     return hash.toString(16).padStart(8, "0");
   }
 
+  function buildSegmentedSlug(segments) {
+    if (!Array.isArray(segments)) {
+      return "";
+    }
+    const slugSegments = [];
+    for (const segment of segments) {
+      const segmentSlug = slugify(segment);
+      if (segmentSlug) {
+        slugSegments.push(segmentSlug);
+      }
+    }
+    return slugSegments.join(TITLE_SEGMENT_SEPARATOR);
+  }
+
   function buildTitleSlug(metadata, tabTitle, watchId) {
     if (metadata && metadata.kind === "episode" && metadata.showTitle) {
       const episodeSegments = [metadata.showTitle];
@@ -60,7 +75,7 @@
       if (metadata.episodeTitle) {
         episodeSegments.push(metadata.episodeTitle);
       }
-      const episodeSlug = slugify(episodeSegments.join(" "));
+      const episodeSlug = buildSegmentedSlug(episodeSegments);
       if (episodeSlug) {
         return episodeSlug;
       }
@@ -121,11 +136,13 @@
   return {
     CAPTURE_ROOT_DIRECTORY,
     FALLBACK_SLUG,
+    TITLE_SEGMENT_SEPARATOR,
     buildBifFilename,
     buildDebugFilename,
     buildDownloadPath,
     buildGlobalDebugPath,
     buildManifestFilename,
+    buildSegmentedSlug,
     buildSubtitleFilename,
     buildTitleSlug,
     hashString,

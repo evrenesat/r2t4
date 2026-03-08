@@ -446,6 +446,19 @@
     return normalized || null;
   }
 
+  function findBestCandidate(candidates, expectedVideoId, predicate) {
+    let bestCandidate = null;
+    for (const candidate of candidates) {
+      if (!predicate(candidate)) {
+        continue;
+      }
+      if (!bestCandidate || candidateScore(candidate, expectedVideoId) > candidateScore(bestCandidate, expectedVideoId)) {
+        bestCandidate = candidate;
+      }
+    }
+    return bestCandidate;
+  }
+
   function parseShowNameFromTabTitle(tabTitle) {
     const strippedTitle = stripNetflixTabTitleSuffix(tabTitle);
     if (!strippedTitle || strippedTitle.toLowerCase() === "netflix") {
@@ -499,32 +512,87 @@
     return null;
   }
 
-  function promoteMovieResultFromTabTitle(result, tabTitleMetadata) {
-    if (!result || result.kind !== "movie" || !tabTitleMetadata) {
-      return result;
+  function promoteMovieMetadataWithTabTitle(metadata, tabTitle) {
+    const tabTitleMetadata = typeof tabTitle === "object" && tabTitle !== null ? tabTitle : parseShowNameFromTabTitle(tabTitle);
+    if (!metadata || metadata.kind !== "movie" || !tabTitleMetadata) {
+      return metadata;
     }
-    const normalizedMovieTitle = normalizeComparisonText(result.movieTitle);
+    const normalizedMovieTitle = normalizeComparisonText(metadata.movieTitle);
     const normalizedShowName = normalizeComparisonText(tabTitleMetadata.showName);
     const normalizedEpisodeTitle = normalizeComparisonText(tabTitleMetadata.episodeTitle);
     if (!normalizedMovieTitle || !normalizedShowName || normalizedShowName === normalizedMovieTitle) {
-      return result;
+      return metadata;
     }
     const shouldPromote =
       normalizedEpisodeTitle === normalizedMovieTitle ||
       (normalizedEpisodeTitle === null &&
         (tabTitleMetadata.seasonNumber !== null || tabTitleMetadata.episodeNumber !== null));
     if (!shouldPromote) {
-      return result;
+      return metadata;
     }
     return {
+      source: "tab_title_promoted",
       kind: "episode",
       entityType: "Episode",
-      videoId: result.videoId,
+      videoId: metadata.videoId,
       showTitle: tabTitleMetadata.showName,
       movieTitle: null,
-      seasonNumber: result.seasonNumber !== null ? result.seasonNumber : tabTitleMetadata.seasonNumber,
-      episodeNumber: result.episodeNumber !== null ? result.episodeNumber : tabTitleMetadata.episodeNumber,
-      episodeTitle: tabTitleMetadata.episodeTitle || result.movieTitle,
+      seasonNumber: metadata.seasonNumber !== null ? metadata.seasonNumber : tabTitleMetadata.seasonNumber,
+      episodeNumber: metadata.episodeNumber !== null ? metadata.episodeNumber : tabTitleMetadata.episodeNumber,
+      episodeTitle: tabTitleMetadata.episodeTitle || metadata.movieTitle,
+    };
+  }
+
+  function buildContextPromotedCandidate(candidates, payloadAnalysis, expectedVideoId) {
+    if (expectedVideoId === null) {
+      return null;
+    }
+    const exactMovieCandidate = findBestCandidate(candidates, expectedVideoId, (candidate) => {
+      return candidate.kind === "movie" && candidate.videoId === expectedVideoId && typeof candidate.movieTitle === "string";
+    });
+    if (!exactMovieCandidate || !exactMovieCandidate.movieTitle) {
+      return null;
+    }
+    const bestEpisodeContextCandidate = findBestCandidate(candidates, expectedVideoId, (candidate) => {
+      return (
+        candidate.kind === "episode" &&
+        typeof candidate.showTitle === "string" &&
+        normalizeComparisonText(candidate.showTitle) !== normalizeComparisonText(exactMovieCandidate.movieTitle)
+      );
+    });
+    const payloadShowTitle =
+      getFirstCollectedValue(payloadAnalysis.valuesByKey, SHOW_TITLE_KEYS, false) ||
+      payloadAnalysis.showContainerTitles[0] ||
+      null;
+    const resolvedShowTitle = payloadShowTitle || bestEpisodeContextCandidate?.showTitle || null;
+    const hasStrongSeriesContext =
+      payloadAnalysis.hasSeriesEntityType ||
+      payloadAnalysis.hasSeriesCountField ||
+      payloadAnalysis.showContainerTitles.length > 0 ||
+      Boolean(bestEpisodeContextCandidate);
+    if (
+      !hasStrongSeriesContext ||
+      !resolvedShowTitle ||
+      normalizeComparisonText(resolvedShowTitle) === normalizeComparisonText(exactMovieCandidate.movieTitle)
+    ) {
+      return null;
+    }
+    return {
+      source: "context_promoted",
+      kind: "episode",
+      entityType: "Episode",
+      videoId: exactMovieCandidate.videoId,
+      showTitle: resolvedShowTitle,
+      movieTitle: null,
+      seasonNumber:
+        exactMovieCandidate.seasonNumber !== null
+          ? exactMovieCandidate.seasonNumber
+          : (bestEpisodeContextCandidate?.seasonNumber ?? null),
+      episodeNumber:
+        exactMovieCandidate.episodeNumber !== null
+          ? exactMovieCandidate.episodeNumber
+          : (bestEpisodeContextCandidate?.episodeNumber ?? null),
+      episodeTitle: exactMovieCandidate.movieTitle,
     };
   }
 
@@ -567,13 +635,25 @@
       candidates.push(combinedCandidate);
     }
     collectHeuristicCandidates(payload, expectedVideoId, 0, candidates, []);
+    const contextPromotedCandidate = buildContextPromotedCandidate(candidates, payloadAnalysis, expectedVideoId);
+    if (contextPromotedCandidate) {
+      candidates.push(contextPromotedCandidate);
+    }
     candidates.sort((leftCandidate, rightCandidate) => {
       return candidateScore(rightCandidate, expectedVideoId) - candidateScore(leftCandidate, expectedVideoId);
     });
-    const result = candidates.length === 0 ? null : buildMetadataResult(candidates[0]);
+    const selectedCandidate = candidates.length === 0 ? null : candidates[0];
+    let result = selectedCandidate ? buildMetadataResult(selectedCandidate) : null;
     const tabTitleMetadata = parseShowNameFromTabTitle(tabTitle);
+    const promotedResult = promoteMovieMetadataWithTabTitle(result, tabTitleMetadata);
+    const selectedCandidateSource =
+      promotedResult !== result
+        ? promotedResult.source || "tab_title_promoted"
+        : selectedCandidate?.source || null;
+    result = buildMetadataResult(promotedResult);
     return {
-      result: promoteMovieResultFromTabTitle(result, tabTitleMetadata),
+      result,
+      selectedCandidateSource,
       candidates: buildCandidateDiagnostics(candidates, expectedVideoId),
       signals: {
         hasSeriesEntityType: payloadAnalysis.hasSeriesEntityType,
@@ -650,5 +730,6 @@
     parseNetflixMemberApiMetadataWithDiagnostics,
     parseNetflixGraphqlMetadata,
     parseShowNameFromTabTitle,
+    promoteMovieMetadataWithTabTitle,
   };
 });

@@ -3,6 +3,7 @@ const assert = require("node:assert/strict");
 
 const {
   FALLBACK_SLUG,
+  TITLE_SEGMENT_SEPARATOR,
   buildBifFilename,
   buildDebugFilename,
   buildDownloadPath,
@@ -28,7 +29,7 @@ test("slugifies episode and movie metadata", () => {
       "ignored",
       "1234",
     ),
-    "weeds-s01e02-free-goat",
+    "weeds__s01e02__free-goat",
   );
   assert.equal(
     buildTitleSlug(
@@ -40,6 +41,34 @@ test("slugifies episode and movie metadata", () => {
       "1234",
     ),
     "amelie",
+  );
+  assert.equal(
+    buildTitleSlug(
+      {
+        kind: "episode",
+        showTitle: "Weeds",
+        seasonNumber: null,
+        episodeNumber: null,
+        episodeTitle: "Free Goat",
+      },
+      "ignored",
+      "1234",
+    ),
+    "weeds__free-goat",
+  );
+  assert.equal(
+    buildTitleSlug(
+      {
+        kind: "episode",
+        showTitle: "Weeds",
+        seasonNumber: null,
+        episodeNumber: null,
+        episodeTitle: null,
+      },
+      "ignored",
+      "1234",
+    ),
+    "weeds",
   );
 });
 
@@ -54,7 +83,7 @@ test("falls back to tab title or watch id when metadata is unavailable", () => {
 });
 
 test("builds deterministic filenames and download paths", () => {
-  const slug = "weeds-s01e02-free-goat";
+  const slug = `weeds${TITLE_SEGMENT_SEPARATOR}s01e02${TITLE_SEGMENT_SEPARATOR}free-goat`;
   const url = "https://example.com/file.bif";
   assert.equal(buildBifFilename(slug, url), `${slug}__bif__${hashString(url)}.bif`);
   assert.equal(
@@ -65,7 +94,7 @@ test("builds deterministic filenames and download paths", () => {
   assert.equal(buildDebugFilename(slug), `${slug}__debug.json`);
   assert.equal(
     buildDownloadPath(slug, "asset.bin"),
-    "Netflix_Captures/weeds-s01e02-free-goat/asset.bin",
+    "Netflix_Captures/weeds__s01e02__free-goat/asset.bin",
   );
   assert.equal(buildGlobalDebugPath(), "Netflix_Captures/_debug/netflix_capture__global_debug.json");
 });
