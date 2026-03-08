@@ -11,6 +11,7 @@
   const VIDEO_ID_KEYS = ["videoId", "movieid", "movieId", "episodeId", "id"];
   const SEASON_NUMBER_KEYS = ["seasonNumber", "seasonNum", "season"];
   const EPISODE_NUMBER_KEYS = ["episodeNumber", "episodeNum", "episode"];
+  const SHOW_CONTAINER_KEYS = ["show", "series", "parent", "parentShow", "ancestor", "seriesMetadata"];
   const MAX_METADATA_SEARCH_DEPTH = 8;
 
   function parseJsonBody(input) {
@@ -152,6 +153,130 @@
     };
   }
 
+  function collectScalarValues(node, depth, valuesByKey) {
+    if (!node || typeof node !== "object" || depth > MAX_METADATA_SEARCH_DEPTH) {
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        collectScalarValues(item, depth + 1, valuesByKey);
+      }
+      return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (typeof value === "string" && value.trim()) {
+        if (!valuesByKey[key]) {
+          valuesByKey[key] = [];
+        }
+        valuesByKey[key].push(value.trim());
+        continue;
+      }
+      const numericValue = toNullableNumber(value);
+      if (numericValue !== null) {
+        if (!valuesByKey[key]) {
+          valuesByKey[key] = [];
+        }
+        valuesByKey[key].push(numericValue);
+        continue;
+      }
+      collectScalarValues(value, depth + 1, valuesByKey);
+    }
+  }
+
+  function collectShowContainerTitles(node, depth, collectedTitles) {
+    if (!node || typeof node !== "object" || depth > MAX_METADATA_SEARCH_DEPTH) {
+      return;
+    }
+    if (Array.isArray(node)) {
+      for (const item of node) {
+        collectShowContainerTitles(item, depth + 1, collectedTitles);
+      }
+      return;
+    }
+    for (const [key, value] of Object.entries(node)) {
+      if (SHOW_CONTAINER_KEYS.includes(key) && value && typeof value === "object" && !Array.isArray(value)) {
+        const title = getStringValue(value, TITLE_KEYS);
+        if (title) {
+          collectedTitles.push(title);
+        }
+      }
+      collectShowContainerTitles(value, depth + 1, collectedTitles);
+    }
+  }
+
+  function getFirstCollectedValue(valuesByKey, keys, allowNumeric) {
+    for (const key of keys) {
+      const values = valuesByKey[key];
+      if (!Array.isArray(values) || values.length === 0) {
+        continue;
+      }
+      for (const value of values) {
+        if (typeof value === "string" && value.trim()) {
+          return value.trim();
+        }
+        if (allowNumeric && typeof value === "number" && Number.isFinite(value)) {
+          return value;
+        }
+      }
+    }
+    return null;
+  }
+
+  function buildCombinedCandidate(payload, expectedVideoId) {
+    const valuesByKey = {};
+    const showContainerTitles = [];
+    collectScalarValues(payload, 0, valuesByKey);
+    collectShowContainerTitles(payload, 0, showContainerTitles);
+
+    const directShowTitle = getFirstCollectedValue(valuesByKey, SHOW_TITLE_KEYS, false);
+    const showTitle = directShowTitle || showContainerTitles[0] || null;
+    const mainTitle = getFirstCollectedValue(valuesByKey, TITLE_KEYS, false);
+    const explicitEpisodeTitle = getFirstCollectedValue(valuesByKey, EPISODE_TITLE_KEYS, false);
+    const seasonNumber = getFirstCollectedValue(valuesByKey, SEASON_NUMBER_KEYS, true);
+    const episodeNumber = getFirstCollectedValue(valuesByKey, EPISODE_NUMBER_KEYS, true);
+    const directVideoId = getFirstCollectedValue(valuesByKey, VIDEO_ID_KEYS, true);
+    const videoId = directVideoId !== null ? directVideoId : expectedVideoId;
+    const hasEpisodeSignals =
+      explicitEpisodeTitle !== null ||
+      seasonNumber !== null ||
+      episodeNumber !== null ||
+      (showTitle !== null && mainTitle !== null && showTitle !== mainTitle);
+
+    if (hasEpisodeSignals) {
+      const episodeTitle =
+        explicitEpisodeTitle || (mainTitle && mainTitle !== showTitle ? mainTitle : null);
+      const normalizedShowTitle = showTitle || null;
+      if (!normalizedShowTitle && !episodeTitle) {
+        return null;
+      }
+      return {
+        kind: "episode",
+        entityType: "Episode",
+        videoId,
+        showTitle: normalizedShowTitle,
+        movieTitle: null,
+        seasonNumber: seasonNumber !== null ? seasonNumber : null,
+        episodeNumber: episodeNumber !== null ? episodeNumber : null,
+        episodeTitle,
+      };
+    }
+
+    if (!mainTitle) {
+      return null;
+    }
+
+    return {
+      kind: "movie",
+      entityType: "Movie",
+      videoId,
+      showTitle: null,
+      movieTitle: mainTitle,
+      seasonNumber: null,
+      episodeNumber: null,
+      episodeTitle: null,
+    };
+  }
+
   function collectHeuristicCandidates(node, expectedVideoId, depth, candidates) {
     if (!node || typeof node !== "object" || depth > MAX_METADATA_SEARCH_DEPTH) {
       return;
@@ -178,6 +303,10 @@
     }
     const expectedVideoId = toNullableNumber(expectedVideoIdInput);
     const candidates = [];
+    const combinedCandidate = buildCombinedCandidate(payload, expectedVideoId);
+    if (combinedCandidate) {
+      candidates.push(combinedCandidate);
+    }
     collectHeuristicCandidates(payload, expectedVideoId, 0, candidates);
     if (candidates.length === 0) {
       return null;

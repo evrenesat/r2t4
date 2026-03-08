@@ -65,6 +65,9 @@ function createTabState(tab) {
     currentWatchId: matcherApi.extractWatchIdFromUrl(tab.url || ""),
     currentTabTitle: typeof tab.title === "string" ? tab.title : "",
     activeSessionKey: null,
+    seriesTitleHint: null,
+    seriesHintWatchId: null,
+    seriesHintPending: false,
     sessions: {},
   };
 }
@@ -101,6 +104,12 @@ function normalizeTabState(tabId, storedState) {
     currentWatchId: storedState?.currentWatchId ? String(storedState.currentWatchId) : null,
     currentTabTitle: typeof storedState?.currentTabTitle === "string" ? storedState.currentTabTitle : "",
     activeSessionKey: typeof storedState?.activeSessionKey === "string" ? storedState.activeSessionKey : null,
+    seriesTitleHint:
+      typeof storedState?.seriesTitleHint === "string" && storedState.seriesTitleHint.trim()
+        ? storedState.seriesTitleHint.trim()
+        : null,
+    seriesHintWatchId: storedState?.seriesHintWatchId ? String(storedState.seriesHintWatchId) : null,
+    seriesHintPending: Boolean(storedState?.seriesHintPending),
     sessions: {},
   };
   const rawSessions = storedState?.sessions;
@@ -330,6 +339,51 @@ function buildManifestPayload(session) {
   };
 }
 
+function deriveSeriesTitleFromMetadata(metadata) {
+  if (!metadata || typeof metadata !== "object") {
+    return null;
+  }
+  if (typeof metadata.showTitle === "string" && metadata.showTitle.trim()) {
+    return metadata.showTitle.trim();
+  }
+  if (typeof metadata.movieTitle === "string" && metadata.movieTitle.trim()) {
+    return metadata.movieTitle.trim();
+  }
+  return null;
+}
+
+function applySeriesHintToMetadata(tabState, session, parsedMetadata) {
+  const seriesTitleHint =
+    typeof tabState.seriesTitleHint === "string" && tabState.seriesTitleHint.trim()
+      ? tabState.seriesTitleHint.trim()
+      : null;
+  if (
+    !tabState.seriesHintPending ||
+    !seriesTitleHint ||
+    !parsedMetadata ||
+    parsedMetadata.kind !== "movie" ||
+    typeof parsedMetadata.movieTitle !== "string" ||
+    !parsedMetadata.movieTitle.trim() ||
+    parsedMetadata.movieTitle.trim() === seriesTitleHint
+  ) {
+    return {
+      metadata: parsedMetadata,
+      inferred: false,
+    };
+  }
+  return {
+    metadata: {
+      ...parsedMetadata,
+      kind: "episode",
+      entityType: "Episode",
+      showTitle: seriesTitleHint,
+      movieTitle: null,
+      episodeTitle: parsedMetadata.movieTitle.trim(),
+    },
+    inferred: true,
+  };
+}
+
 function buildDebugPayload(session) {
   return {
     generatedAt: new Date().toISOString(),
@@ -433,7 +487,7 @@ function classifyRequestFromUrl(details) {
   if (matcherApi.isGraphqlMetadataUrl(details.url)) {
     return REQUEST_KIND_GRAPHQL;
   }
-  if (matcherApi.isMemberApiMetadataUrl(details.url)) {
+  if (matcherApi.isMemberApiMetadataUrl(details.url) || matcherApi.isLicensedManifestUrl(details.url)) {
     return REQUEST_KIND_METADATA;
   }
   if (matcherApi.isBifUrl(details.url)) {
@@ -449,7 +503,7 @@ function classifyRequestFromHeaders(details) {
   if (matcherApi.isGraphqlMetadataUrl(details.url)) {
     return REQUEST_KIND_GRAPHQL;
   }
-  if (matcherApi.isMemberApiMetadataUrl(details.url)) {
+  if (matcherApi.isMemberApiMetadataUrl(details.url) || matcherApi.isLicensedManifestUrl(details.url)) {
     return REQUEST_KIND_METADATA;
   }
   if (matcherApi.isBifUrl(details.url)) {
@@ -532,14 +586,16 @@ function chooseMetadataApplication(session, parsedMetadata, requestVideoId) {
 }
 
 async function applyMetadataToSession(tabState, session, requestKind, requestUrl, parsedMetadata, requestVideoId) {
-  const decision = chooseMetadataApplication(session, parsedMetadata, requestVideoId);
+  const hintedMetadataResult = applySeriesHintToMetadata(tabState, session, parsedMetadata);
+  const candidateMetadata = hintedMetadataResult.metadata;
+  const decision = chooseMetadataApplication(session, candidateMetadata, requestVideoId);
   if (!decision.apply) {
     await appendSessionDebugEvent(tabState, session.sessionKey, {
       stage: "metadata_skipped",
       requestKind,
       url: requestUrl,
       reason: decision.reason,
-      metadataVideoId: parsedMetadata?.videoId ?? null,
+      metadataVideoId: candidateMetadata?.videoId ?? null,
       watchId: session.watchId,
       requestVideoId: requestVideoId || null,
     });
@@ -547,18 +603,23 @@ async function applyMetadataToSession(tabState, session, requestKind, requestUrl
   }
 
   session.metadata = {
-    ...parsedMetadata,
+    ...candidateMetadata,
     requestVideoId: requestVideoId || null,
   };
+  const resolvedSeriesTitle = deriveSeriesTitleFromMetadata(session.metadata);
+  tabState.seriesTitleHint = resolvedSeriesTitle;
+  tabState.seriesHintWatchId = session.watchId;
+  tabState.seriesHintPending = false;
   await persistTabState(tabState);
   await appendSessionDebugEvent(tabState, session.sessionKey, {
     stage: "metadata_applied",
     requestKind,
     url: requestUrl,
     reason: decision.reason,
-    metadataKind: parsedMetadata.kind,
-    videoId: parsedMetadata.videoId,
+    metadataKind: candidateMetadata.kind,
+    videoId: candidateMetadata.videoId,
     requestVideoId: requestVideoId || null,
+    inferredFromSeriesHint: hintedMetadataResult.inferred,
   });
   await flushSessionAssets(tabState, session);
   return true;
@@ -1013,6 +1074,9 @@ async function disableCaptureForTab(tabId) {
     return;
   }
   tabState.captureEnabled = false;
+  tabState.seriesTitleHint = null;
+  tabState.seriesHintWatchId = null;
+  tabState.seriesHintPending = false;
   await closeAllSessions(tabState, "user_disabled");
   await persistTabState(tabState);
   await appendGlobalDebugEvent({
@@ -1092,12 +1156,21 @@ async function handleTabUpdated(tabId, changeInfo, tab) {
     return;
   }
   if (previousWatchId !== nextWatchId) {
-    const closedSession = closeActiveSession(
-      tabState,
-      previousWatchId && nextWatchId ? "watch_changed" : "left_watch_page",
-    );
+    const transitionReason = previousWatchId && nextWatchId ? "watch_changed" : "left_watch_page";
+    const closedSession = closeActiveSession(tabState, transitionReason);
     if (closedSession) {
+      const seriesTitleHint = deriveSeriesTitleFromMetadata(closedSession.metadata);
+      if (transitionReason === "watch_changed" && seriesTitleHint) {
+        tabState.seriesTitleHint = seriesTitleHint;
+        tabState.seriesHintWatchId = closedSession.watchId;
+        tabState.seriesHintPending = true;
+      }
       await flushSessionAssets(tabState, closedSession);
+    }
+    if (transitionReason === "left_watch_page") {
+      tabState.seriesTitleHint = null;
+      tabState.seriesHintWatchId = null;
+      tabState.seriesHintPending = false;
     }
     if (nextWatchId) {
       ensureActiveSession(tabState);

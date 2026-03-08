@@ -9,6 +9,7 @@
   const NETFLIX_GRAPHQL_HOSTNAME = "web.prod.cloud.netflix.com";
   const NETFLIX_GRAPHQL_PATHNAME = "/graphql";
   const NETFLIX_MEMBERAPI_METADATA_PATHNAME = "/nq/website/memberapi/release/metadata";
+  const NETFLIX_LICENSED_MANIFEST_PATH_PREFIX = "/msl/playapi/cadmium/licensedmanifest/";
   const WATCH_PATH_REGEX = /^\/watch\/(\d+)(?:[/?#]|$)/;
   const BIF_URL_REGEX = /\.bif(?:$|[?#])/i;
   const TTML_NAMESPACE_MARKER = "http://www.w3.org/ns/ttml";
@@ -61,6 +62,16 @@
     );
   }
 
+  function isLicensedManifestUrl(url) {
+    const parsedUrl = safelyParseUrl(url);
+    return Boolean(
+      parsedUrl &&
+        parsedUrl.hostname === NETFLIX_HOSTNAME &&
+        parsedUrl.pathname.startsWith(NETFLIX_LICENSED_MANIFEST_PATH_PREFIX) &&
+        parsedUrl.searchParams.has("mainContentViewableId"),
+    );
+  }
+
   function extractMetadataVideoIdFromUrl(url) {
     const parsedUrl = safelyParseUrl(url);
     if (!parsedUrl) {
@@ -68,6 +79,9 @@
     }
     if (isMemberApiMetadataUrl(url)) {
       return parsedUrl.searchParams.get("movieid");
+    }
+    if (isLicensedManifestUrl(url)) {
+      return parsedUrl.searchParams.get("mainContentViewableId");
     }
     return null;
   }
@@ -142,6 +156,7 @@
   return {
     BIF_URL_REGEX,
     NETFLIX_MEMBERAPI_METADATA_PATHNAME,
+    NETFLIX_LICENSED_MANIFEST_PATH_PREFIX,
     NETFLIX_GRAPHQL_HOSTNAME,
     NETFLIX_GRAPHQL_PATHNAME,
     NETFLIX_HOSTNAME,
@@ -155,6 +170,7 @@
     hasXmlContentType,
     isBifUrl,
     isGraphqlMetadataUrl,
+    isLicensedManifestUrl,
     isMemberApiMetadataUrl,
     isLikelySubtitleUrl,
     isNetflixWatchUrl,

@@ -70,7 +70,9 @@ Each extractor run lives in its own `output/run_<preset>_<timestamp>/` directory
 
 - `netflix-firefox-extension/background.js`: Toolbar toggle, runtime permission request, per-tab capture state, passive response teeing, metadata correlation, and manifest writing.
 - The extension groups candidate watch-page metadata responses, BIFs, and subtitle XML files into watch sessions keyed by the current Netflix `watchId`. Assets are buffered first and only written once the session has metadata or closes.
-- Watch naming now prefers Netflix `memberapi/release/metadata` responses and still accepts GraphQL when it yields a better exact-match title payload.
+- Watch naming now prefers Netflix `memberapi/release/metadata` and `licensedmanifest` responses and still accepts GraphQL when it yields a better exact-match title payload.
+- Metadata parsing now merges title fields across an entire playback metadata payload so a nested series title plus top-level episode title can still resolve to an episode slug and manifest entry.
+- The background state also carries a narrow per-tab series-title hint across direct watch-to-watch transitions so autoplay/manual next-episode navigation can reuse the previous show title when the new metadata payload only exposes an episode title.
 - The extension writes per-title manifests and per-title/global debug JSON logs so inconsistent CDN behavior can be diagnosed from saved request metadata.
 - `netflix-firefox-extension/lib/*.js`: Pure helpers for request matching, metadata parsing, deterministic file naming, and persisted tab state.
 - `netflix-firefox-extension/tests/*.test.js`: Node-based regression tests for the pure capture helpers.

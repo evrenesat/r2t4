@@ -80,14 +80,12 @@ test("parses heuristic episode metadata from memberapi-like JSON", () => {
   assert.deepEqual(
     parseNetflixMemberApiMetadata(
       {
-        video: {
-          summary: {
-            videoId: 70094484,
-            showTitle: "Weeds",
-            title: "Free Goat",
-            seasonNumber: 1,
-            episodeNumber: 2,
-          },
+        videoId: 70094484,
+        title: "Free Goat",
+        seasonNumber: 1,
+        episodeNumber: 2,
+        series: {
+          title: "Weeds",
         },
       },
       "70094484",

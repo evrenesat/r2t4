@@ -9,6 +9,7 @@ const {
   hasXmlContentType,
   isBifUrl,
   isGraphqlMetadataUrl,
+  isLicensedManifestUrl,
   isMemberApiMetadataUrl,
   isLikelySubtitleUrl,
   isNetflixWatchUrl,
@@ -43,8 +44,20 @@ test("detects GraphQL and BIF URLs", () => {
     true,
   );
   assert.equal(
+    isLicensedManifestUrl(
+      "https://www.netflix.com/msl/playapi/cadmium/licensedmanifest/1?mainContentViewableId=70094486",
+    ),
+    true,
+  );
+  assert.equal(
     extractMetadataVideoIdFromUrl(
       "https://www.netflix.com/nq/website/memberapi/release/metadata?movieid=70094486&materialize=true",
+    ),
+    "70094486",
+  );
+  assert.equal(
+    extractMetadataVideoIdFromUrl(
+      "https://www.netflix.com/msl/playapi/cadmium/licensedmanifest/1?mainContentViewableId=70094486",
     ),
     "70094486",
   );

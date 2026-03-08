@@ -71,7 +71,9 @@ The repo also includes a Firefox-only WebExtension at `netflix-firefox-extension
 - Click the toolbar icon on a Netflix `watch` tab to toggle capture for that tab.
 - On first enable, Firefox prompts for Netflix/CDN host permissions.
 - The extension now groups watch-page metadata responses, BIF files, and subtitle XML files into a per-watch session keyed by the current `watchId`, then writes them under `Netflix_Captures/<title-slug>/` once that session has enough information to name them correctly.
-- Title metadata now prefers Netflix watch-page `memberapi/release/metadata` responses and still falls back to GraphQL when useful, because GraphQL alone is often empty or unrelated during playback.
+- Title metadata now prefers Netflix watch-page `memberapi/release/metadata` and `licensedmanifest` responses and still falls back to GraphQL when useful, because GraphQL alone is often empty or unrelated during playback.
+- Episode naming now attempts to merge series title, season/episode numbers, and episode title across the whole metadata payload so TV episodes can land in series-aware slugs instead of movie-like one-off folders.
+- When Netflix only returns an episode title on a direct next-episode transition, the extension now carries forward the previously resolved series title within that watch tab so consecutive episodes stay grouped under the same show context.
 - Netflix tabs now auto-start in capture-enabled mode by default after reload/startup, while the toolbar button can still turn capture off for the current tab.
 - A manifest JSON file in the same folder records the parsed Netflix title metadata and the captured asset filenames.
 - The extension also writes per-title and global debug JSON logs so request-level filtering decisions can be inspected after a capture run.

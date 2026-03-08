@@ -19,6 +19,8 @@
 - Fixed a tab-state persistence race in the extension background script so pending BIF/subtitle assets are no longer lost when concurrent request handlers persist state.
 - Added Netflix `memberapi/release/metadata` capture and heuristic metadata parsing because GraphQL responses are often empty or unrelated during playback.
 - Broadened subtitle XML validation to accept real Netflix timed-text variants that do not always carry the exact `textType="SUBS"` marker.
+- Added Netflix `licensedmanifest` as a second metadata source and changed metadata parsing to merge series/season/episode fields across a whole payload so TV episodes stop collapsing into movie-like one-title manifests.
+- Added a per-tab series-title hint that carries across direct watch-to-watch transitions, letting next-episode playback reuse the previously resolved show title when the new metadata payload only contains the episode title.
 - Updated `README.md` and `ARCHITECTURE.md` to describe the new browser-capture entrypoint and its relationship to the existing local analysis pipeline.
 
 ## 2026-03-06
