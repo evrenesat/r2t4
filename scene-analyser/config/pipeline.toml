@@ -43,11 +43,6 @@ id = "openai/gpt-4.1"
 api = "openrouter"
 context_size = 128000
 
-[models.glmflash]
-id = "glm-4.7-flash"
-api = "zai"
-context_size = 100000
-
 [roles]
 subtitle_summary_model = "qwen_summary"
 scene_analysis_model = "qwen_scene"

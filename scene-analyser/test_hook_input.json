@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "AfterAgent": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "name": "test-hook",
+            "type": "command",
+            "command": "./test_hook_input.sh",
+            "description": "Test hook input"
+          }
+        ]
+      }
+    ]
+  }
+}
