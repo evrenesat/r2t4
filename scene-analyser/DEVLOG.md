@@ -1,5 +1,26 @@
 # Devlog
 
+## 2026-03-08
+
+- Added a Firefox-only WebExtension proof of concept under `netflix-firefox-extension/`.
+- Implemented passive per-tab capture toggling for Netflix watch pages with runtime host-permission requests, badge state, and persisted tab capture state.
+- Added live-response tee handling for Netflix GraphQL metadata, BIF thumbnail files, and TTML subtitle XML files without modifying request or response behavior.
+- Added deterministic capture naming under `Netflix Captures/<title-slug>/` plus a manifest JSON file that records parsed title metadata and saved asset paths.
+- Added Node-based tests for URL matching, GraphQL metadata parsing, deterministic naming, and extension state storage.
+- Hardened GraphQL metadata parsing so empty or non-JSON responses are ignored instead of surfacing runtime errors.
+- Moved Netflix/CDN origin declarations to Firefox MV3 `host_permissions` so the browser can actually grant `webRequest` access for those origins.
+- Changed the Firefox toggle behavior so capture remains enabled until the user explicitly turns it off, instead of auto-disabling on non-watch navigation.
+- Renamed the extension download root from `Netflix Captures` to `Netflix_Captures` and tightened tab-title fallback so plain `Netflix` does not become the content slug.
+- Added per-title and global debug JSON logs for every seen candidate request and fixed manifest writing so a title folder no longer accumulates assets from unrelated titles visited in the same tab.
+- Moved response filtering earlier for BIF/subtitle/GraphQL request URLs and clear stale metadata when the watch ID changes so episode-to-episode navigation does not inherit the prior title slug.
+- Limited GraphQL metadata application to responses whose parsed `videoId` matches the current watch URL and delayed blob URL revocation so Firefox downloads are less likely to fail nondeterministically.
+- Replaced the immediate-save background flow with a watch-session aggregator keyed by `watchId`, buffering BIF and subtitle payloads until matching metadata arrives or the watch session closes.
+- Added stored-state normalization for older extension state and default-enabled startup behavior for Netflix tabs so background reloads no longer crash or leave tabs inert.
+- Fixed a tab-state persistence race in the extension background script so pending BIF/subtitle assets are no longer lost when concurrent request handlers persist state.
+- Added Netflix `memberapi/release/metadata` capture and heuristic metadata parsing because GraphQL responses are often empty or unrelated during playback.
+- Broadened subtitle XML validation to accept real Netflix timed-text variants that do not always carry the exact `textType="SUBS"` marker.
+- Updated `README.md` and `ARCHITECTURE.md` to describe the new browser-capture entrypoint and its relationship to the existing local analysis pipeline.
+
 ## 2026-03-06
 
 - Added the second-stage local inference runner for completed grid runs.

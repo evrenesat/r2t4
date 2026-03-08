@@ -4,6 +4,8 @@
 
 The project operates as a config-driven pipeline driven by `pipeline_runner.py`, executing in overlapping lanes. It is configured by a single `config/pipeline.toml` that defines alias-based model roles, stage defaults, and execution profiles.
 
+The repo also contains a separate Firefox capture entrypoint in `netflix-firefox-extension/`. That extension is intentionally passive: it observes Netflix watch-page traffic, tees matching BIF and subtitle XML responses, and writes them to the user's download directory for later local analysis.
+
 ### Mermaid Runtime Diagram
 
 ```mermaid
@@ -64,6 +66,17 @@ Each extractor run lives in its own `output/run_<preset>_<timestamp>/` directory
 - `tdt_format.py` / `artifact_runner.py`: Schema definitions and the final artifact authoring stage.
 - `research_context.py`: Optional lazy `asky` integration.
 
+## Browser Capture POC
+
+- `netflix-firefox-extension/background.js`: Toolbar toggle, runtime permission request, per-tab capture state, passive response teeing, metadata correlation, and manifest writing.
+- The extension groups candidate watch-page metadata responses, BIFs, and subtitle XML files into watch sessions keyed by the current Netflix `watchId`. Assets are buffered first and only written once the session has metadata or closes.
+- Watch naming now prefers Netflix `memberapi/release/metadata` responses and still accepts GraphQL when it yields a better exact-match title payload.
+- The extension writes per-title manifests and per-title/global debug JSON logs so inconsistent CDN behavior can be diagnosed from saved request metadata.
+- `netflix-firefox-extension/lib/*.js`: Pure helpers for request matching, metadata parsing, deterministic file naming, and persisted tab state.
+- `netflix-firefox-extension/tests/*.test.js`: Node-based regression tests for the pure capture helpers.
+
+The extension does not modify Netflix player APIs, page DOM, request URLs, request headers, or response bytes. Its role is limited to exporting BIF and subtitle assets that can later feed the existing local pipeline. Once the user toggles capture on for a Netflix tab, it stays enabled until the user clicks the toolbar icon again or closes the tab.
+
 ## Testing Approach
 
 The regression surface is protected with small `unittest` modules that focus on:
@@ -71,3 +84,5 @@ The regression surface is protected with small `unittest` modules that focus on:
 - cache-friendly subtitle summary precompute and pipeline orchestration
 - subtitle parsing and strategies
 - artifact validation and retries
+
+The Firefox extension helpers are covered separately with small `node --test` suites for URL matching, metadata parsing, file naming, and storage semantics.

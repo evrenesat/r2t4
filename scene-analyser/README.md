@@ -1,6 +1,6 @@
 # Scene Analyser
 
-This project has two local stages:
+This project has three local processing stages plus one Firefox capture entrypoint:
 
 1. `extractor_v1.py`
    Builds timestamped 2x2 scene grids from a movie or episode. Subtitle extraction, normalized transcript export, and summary precompute happen here.
@@ -8,6 +8,8 @@ This project has two local stages:
    Reads one completed grid run and sends sequential OpenAI-compatible vision requests to a local model endpoint, utilizing precomputed capable-model summaries.
 3. `artifact_runner.py`
    Reads one completed inference run and asks a stronger model to generate a validated Timed Descriptive Transcript artifact.
+4. `netflix-firefox-extension/`
+   Passively captures Netflix BIF thumbnail files, Netflix timed-text XML files, and a small manifest JSON from Firefox watch-page traffic without changing playback behavior.
 
 ## Setup
 
@@ -61,6 +63,24 @@ Run the extractor directly (or rely on `pipeline_runner.py` to start it):
 ```bash
 uv run python extractor_v1.py
 ```
+
+## Firefox Netflix Capture POC
+
+The repo also includes a Firefox-only WebExtension at `netflix-firefox-extension/`.
+
+- Click the toolbar icon on a Netflix `watch` tab to toggle capture for that tab.
+- On first enable, Firefox prompts for Netflix/CDN host permissions.
+- The extension now groups watch-page metadata responses, BIF files, and subtitle XML files into a per-watch session keyed by the current `watchId`, then writes them under `Netflix_Captures/<title-slug>/` once that session has enough information to name them correctly.
+- Title metadata now prefers Netflix watch-page `memberapi/release/metadata` responses and still falls back to GraphQL when useful, because GraphQL alone is often empty or unrelated during playback.
+- Netflix tabs now auto-start in capture-enabled mode by default after reload/startup, while the toolbar button can still turn capture off for the current tab.
+- A manifest JSON file in the same folder records the parsed Netflix title metadata and the captured asset filenames.
+- The extension also writes per-title and global debug JSON logs so request-level filtering decisions can be inspected after a capture run.
+
+Load it temporarily in Firefox:
+
+1. Open `about:debugging#/runtime/this-firefox`.
+2. Click `Load Temporary Add-on...`.
+3. Select `netflix-firefox-extension/manifest.json`.
 
 ## Stage 2: Local Vision Inference
 
@@ -134,6 +154,7 @@ The repo includes `batch_first_ten_minutes.py`. This uses the new `pipeline_runn
 ## Verification
 
 ```bash
+node --test netflix-firefox-extension/tests/*.test.js
 uv run python -m py_compile extractor_v1.py frame_selector.py inference_runner.py subtitle_ingestion.py context_strategies.py openai_compatible_client.py scene_memory.py tdt_format.py artifact_runner.py research_context.py pipeline_config.py pipeline_runner.py subtitle_summary_precompute.py
 uv run python -m unittest discover -s tests -p 'test_*.py'
 ```
