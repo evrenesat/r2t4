@@ -23,6 +23,7 @@ const FILTER_STATUS_COMPLETED = "completed";
 const MAX_TAB_DEBUG_EVENTS = 600;
 const MAX_GLOBAL_DEBUG_EVENTS = 3000;
 const DEBUG_FLUSH_DELAY_MS = 750;
+const METADATA_DIAGNOSTIC_CANDIDATE_LIMIT = 10;
 
 const matcherApi = globalThis.NetflixCaptureMatchers;
 const metadataApi = globalThis.NetflixMetadataParser;
@@ -352,9 +353,6 @@ function deriveSeriesTitleFromMetadata(metadata) {
   if (typeof metadata.showTitle === "string" && metadata.showTitle.trim()) {
     return metadata.showTitle.trim();
   }
-  if (typeof metadata.movieTitle === "string" && metadata.movieTitle.trim()) {
-    return metadata.movieTitle.trim();
-  }
   return null;
 }
 
@@ -530,6 +528,38 @@ function buildBodyPreview(bodyText) {
     return "";
   }
   return bodyText.replace(/\s+/g, " ").trim().slice(0, 180);
+}
+
+function extractTopLevelPayloadKeys(bodyText) {
+  if (typeof bodyText !== "string") {
+    return [];
+  }
+  try {
+    const payload = JSON.parse(bodyText);
+    return payload && typeof payload === "object" && !Array.isArray(payload) ? Object.keys(payload) : [];
+  } catch (_error) {
+    return [];
+  }
+}
+
+function summarizeDiagnosticCandidates(candidates) {
+  if (!Array.isArray(candidates)) {
+    return [];
+  }
+  return candidates.slice(0, METADATA_DIAGNOSTIC_CANDIDATE_LIMIT).map((candidate) => {
+    return {
+      source: candidate.source || null,
+      score: candidate.score,
+      kind: candidate.kind,
+      entityType: candidate.entityType,
+      videoId: candidate.videoId,
+      showTitle: candidate.showTitle,
+      movieTitle: candidate.movieTitle,
+      seasonNumber: candidate.seasonNumber,
+      episodeNumber: candidate.episodeNumber,
+      episodeTitle: candidate.episodeTitle,
+    };
+  });
 }
 
 function metadataFieldCount(metadata) {
@@ -804,7 +834,7 @@ async function processGraphqlCapture(tabState, session, bodyText, bytes) {
 
 async function processMetadataCapture(tabState, session, requestEntry, bodyText, bytes) {
   const requestVideoId = matcherApi.extractMetadataVideoIdFromUrl(requestEntry.url);
-  const parsedMetadata = metadataApi.parseNetflixMemberApiMetadata(bodyText, requestVideoId);
+  const parsedMetadata = metadataApi.parseNetflixMemberApiMetadata(bodyText, requestVideoId, session.tabTitle);
   await appendSessionDebugEvent(tabState, session.sessionKey, {
     stage: "request_completed",
     requestKind: REQUEST_KIND_METADATA,
@@ -833,8 +863,27 @@ async function processMetadataCapture(tabState, session, requestEntry, bodyText,
     showTitle: parsedMetadata.showTitle,
     movieTitle: parsedMetadata.movieTitle,
     episodeTitle: parsedMetadata.episodeTitle,
+    seasonNumber: parsedMetadata.seasonNumber,
+    episodeNumber: parsedMetadata.episodeNumber,
     requestVideoId: requestVideoId || null,
   });
+  if (parsedMetadata.kind === "movie") {
+    const diagnostics = metadataApi.parseNetflixMemberApiMetadataWithDiagnostics(
+      bodyText,
+      requestVideoId,
+      session.tabTitle,
+    );
+    await appendSessionDebugEvent(tabState, session.sessionKey, {
+      stage: "metadata_diagnostics",
+      requestKind: REQUEST_KIND_METADATA,
+      url: requestEntry.url,
+      requestVideoId: requestVideoId || null,
+      payloadTopKeys: extractTopLevelPayloadKeys(bodyText),
+      signals: diagnostics.signals,
+      candidateCount: diagnostics.candidates.length,
+      candidates: summarizeDiagnosticCandidates(diagnostics.candidates),
+    });
+  }
   try {
     await applyMetadataToSession(
       tabState,

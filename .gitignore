@@ -2,3 +2,5 @@ server/data
 r2t4-server
 scene-analyser/output/*
 scene-analyser/Netflix_Captures
+scene-analyser/netflix-firefox-extension/Netflix_Captures
+scene-analyser/netflix-firefox-extension/HANDOVER.md

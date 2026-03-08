@@ -1,5 +1,13 @@
 # Devlog
 
+## 2026-03-08 (memberapi episode fallback and diagnostics)
+
+- Fixed the series-hint regression in `background.js`: `deriveSeriesTitleFromMetadata` now trusts only `showTitle`, so a misclassified first episode no longer seeds later episodes with the previous episode name as the series title.
+- Added `parseNetflixMemberApiMetadataWithDiagnostics` and `parseShowNameFromTabTitle` in `lib/metadata_parser.js`, plus stronger episode scoring for candidates that carry both `showTitle` and `episodeTitle`.
+- Added tab-title fallback for movie-like memberapi results when the Netflix watch title clearly encodes series context (`Show S1:E2 Episode`, `Show: Episode`, `Show - Episode`), while keeping plain movie titles such as `Roma | Netflix` untouched.
+- Added bounded `metadata_diagnostics` debug events for movie-classified memberapi captures, including top-level payload keys, detected episode signals, and candidate summaries.
+- Added 7 metadata parser regression tests for diagnostics shape, tab-title parsing, movie false-positive avoidance, and episode promotion from tab-title context.
+
 ## 2026-03-08 (metadata quality and debug observability)
 
 - Added error boundaries in `finalizeRequest`, `processMetadataCapture` so exceptions are recorded as `finalize_error`/`metadata_apply_error` debug events instead of being silently swallowed by the outer `void .catch()`.

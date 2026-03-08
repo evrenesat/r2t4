@@ -4,6 +4,8 @@ const assert = require("node:assert/strict");
 const {
   parseNetflixGraphqlMetadata,
   parseNetflixMemberApiMetadata,
+  parseNetflixMemberApiMetadataWithDiagnostics,
+  parseShowNameFromTabTitle,
 } = require("../lib/metadata_parser.js");
 
 const SAMPLE_GRAPHQL_PAYLOAD = {
@@ -195,4 +197,126 @@ test("detects episode from show container even when show title matches main titl
   );
   assert.equal(result.kind, "episode");
   assert.equal(result.showTitle, "Gossip Girl");
+});
+
+test("returns parser diagnostics for memberapi payloads", () => {
+  const diagnostics = parseNetflixMemberApiMetadataWithDiagnostics(
+    {
+      videoId: 70094484,
+      title: "Free Goat",
+      seasonNumber: 1,
+      episodeNumber: 2,
+      series: {
+        title: "Weeds",
+      },
+      entityType: "Episode",
+    },
+    "70094484",
+  );
+
+  assert.deepEqual(diagnostics.result, {
+    kind: "episode",
+    entityType: "Episode",
+    videoId: 70094484,
+    showTitle: "Weeds",
+    movieTitle: null,
+    seasonNumber: 1,
+    episodeNumber: 2,
+    episodeTitle: "Free Goat",
+  });
+  assert.ok(Array.isArray(diagnostics.candidates));
+  assert.ok(diagnostics.candidates.length >= 1);
+  assert.equal(diagnostics.candidates[0].score > 0, true);
+  assert.equal(diagnostics.signals.hasSeriesEntityType, true);
+  assert.equal(diagnostics.signals.hasSeriesCountField, false);
+  assert.deepEqual(diagnostics.signals.showContainerTitlesFound, ["Weeds"]);
+  assert.deepEqual(diagnostics.signals.entityTypesFound, ["Episode"]);
+});
+
+test("parses season and episode metadata from Netflix tab titles", () => {
+  assert.deepEqual(parseShowNameFromTabTitle("Bones S1:E18 The Man with the Bone | Netflix"), {
+    showName: "Bones",
+    episodeTitle: "The Man with the Bone",
+    seasonNumber: 1,
+    episodeNumber: 18,
+  });
+});
+
+test("parses colon-delimited Netflix tab titles", () => {
+  assert.deepEqual(parseShowNameFromTabTitle("Girl From Nowhere: The Reset | Netflix"), {
+    showName: "Girl From Nowhere",
+    episodeTitle: "The Reset",
+    seasonNumber: null,
+    episodeNumber: null,
+  });
+});
+
+test("ignores plain movie-style Netflix tab titles", () => {
+  assert.equal(parseShowNameFromTabTitle("Roma | Netflix"), null);
+});
+
+test("promotes movie-like memberapi payloads to episodes from season-marked tab titles", () => {
+  const result = parseNetflixMemberApiMetadata(
+    {
+      videoId: 701,
+      title: "The Man with the Bone",
+    },
+    "701",
+    "Bones S1:E18 The Man with the Bone | Netflix",
+  );
+
+  assert.deepEqual(result, {
+    kind: "episode",
+    entityType: "Episode",
+    videoId: 701,
+    showTitle: "Bones",
+    movieTitle: null,
+    seasonNumber: 1,
+    episodeNumber: 18,
+    episodeTitle: "The Man with the Bone",
+  });
+});
+
+test("promotes movie-like memberapi payloads to episodes from colon-delimited tab titles", () => {
+  const result = parseNetflixMemberApiMetadata(
+    {
+      videoId: 702,
+      title: "The Reset",
+    },
+    "702",
+    "Girl From Nowhere: The Reset | Netflix",
+  );
+
+  assert.deepEqual(result, {
+    kind: "episode",
+    entityType: "Episode",
+    videoId: 702,
+    showTitle: "Girl From Nowhere",
+    movieTitle: null,
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: "The Reset",
+  });
+});
+
+test("does not reclassify movie payloads when tab title episode portion does not match", () => {
+  const result = parseNetflixMemberApiMetadata(
+    {
+      videoId: 42,
+      title: "Mission: Impossible",
+    },
+    "42",
+    "Mission: Impossible | Netflix",
+  );
+
+  assert.deepEqual(result, {
+    kind: "movie",
+    entityType: "Movie",
+    videoId: 42,
+    showTitle: null,
+    movieTitle: "Mission: Impossible",
+    seasonNumber: null,
+    episodeNumber: null,
+    episodeTitle: null,
+  });
 });
