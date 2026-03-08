@@ -125,3 +125,74 @@ test("uses the expected video id when memberapi-like JSON omits it", () => {
     },
   );
 });
+
+test("detects episode from explicit entityType field", () => {
+  const result = parseNetflixMemberApiMetadata(
+    {
+      videoId: 70212577,
+      title: "Gossip Girl",
+      entityType: "Show",
+    },
+    "70212577",
+  );
+  assert.equal(result.kind, "episode");
+  assert.equal(result.showTitle, "Gossip Girl");
+  assert.equal(result.movieTitle, null);
+});
+
+test("detects episode from type field with series value", () => {
+  const result = parseNetflixMemberApiMetadata(
+    {
+      videoId: 70212577,
+      title: "Gossip Girl",
+      type: "series",
+    },
+    "70212577",
+  );
+  assert.equal(result.kind, "episode");
+  assert.equal(result.showTitle, "Gossip Girl");
+});
+
+test("detects episode from show container in nested memberapi payload", () => {
+  const result = parseNetflixMemberApiMetadata(
+    {
+      videoId: 70212577,
+      title: "Pilot",
+      show: {
+        title: "Gossip Girl",
+      },
+    },
+    "70212577",
+  );
+  assert.equal(result.kind, "episode");
+  assert.equal(result.showTitle, "Gossip Girl");
+  assert.equal(result.episodeTitle, "Pilot");
+});
+
+test("detects episode from numSeasons field", () => {
+  const result = parseNetflixMemberApiMetadata(
+    {
+      videoId: 70212577,
+      title: "Gossip Girl",
+      numSeasons: 6,
+    },
+    "70212577",
+  );
+  assert.equal(result.kind, "episode");
+  assert.equal(result.showTitle, "Gossip Girl");
+});
+
+test("detects episode from show container even when show title matches main title", () => {
+  const result = parseNetflixMemberApiMetadata(
+    {
+      videoId: 70212577,
+      title: "Gossip Girl",
+      series: {
+        title: "Gossip Girl",
+      },
+    },
+    "70212577",
+  );
+  assert.equal(result.kind, "episode");
+  assert.equal(result.showTitle, "Gossip Girl");
+});

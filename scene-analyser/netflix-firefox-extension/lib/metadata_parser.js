@@ -12,6 +12,9 @@
   const SEASON_NUMBER_KEYS = ["seasonNumber", "seasonNum", "season"];
   const EPISODE_NUMBER_KEYS = ["episodeNumber", "episodeNum", "episode"];
   const SHOW_CONTAINER_KEYS = ["show", "series", "parent", "parentShow", "ancestor", "seriesMetadata"];
+  const SERIES_COUNT_KEYS = ["numSeasons", "numberOfEpisodes", "numEpisodes", "seasonCount", "episodeCount"];
+  const ENTITY_TYPE_KEYS = ["type", "entityType", "__typename", "videoType"];
+  const EPISODE_ENTITY_VALUES = new Set(["episode", "show", "series", "tvseries", "miniseries", "Episode", "Show"]);
   const MAX_METADATA_SEARCH_DEPTH = 8;
 
   function parseJsonBody(input) {
@@ -107,6 +110,37 @@
     return score;
   }
 
+  function hasSeriesEntityType(node) {
+    for (const key of ENTITY_TYPE_KEYS) {
+      const value = node[key];
+      if (typeof value === "string" && EPISODE_ENTITY_VALUES.has(value)) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function isShowLevelEntityType(node) {
+    for (const key of ENTITY_TYPE_KEYS) {
+      const value = node[key];
+      if (typeof value !== "string") continue;
+      const lower = value.toLowerCase();
+      if (lower === "show" || lower === "series" || lower === "tvseries" || lower === "miniseries") {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function hasSeriesCountField(node) {
+    for (const key of SERIES_COUNT_KEYS) {
+      if (toNullableNumber(node[key]) !== null) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   function buildHeuristicCandidate(node, expectedVideoId) {
     if (!node || typeof node !== "object" || Array.isArray(node)) {
       return null;
@@ -129,13 +163,18 @@
       explicitEpisodeTitle !== null ||
       seasonNumber !== null ||
       episodeNumber !== null ||
+      hasSeriesEntityType(node) ||
+      hasSeriesCountField(node) ||
       (showTitle !== null && mainTitle !== null && showTitle !== mainTitle);
     const entityType = hasEpisodeSignals ? "Episode" : "Movie";
     const movieTitle = !hasEpisodeSignals ? mainTitle : null;
+    const showLevelType = isShowLevelEntityType(node) || hasSeriesCountField(node);
     const episodeTitle = hasEpisodeSignals
-      ? explicitEpisodeTitle || (mainTitle && mainTitle !== showTitle ? mainTitle : null)
+      ? explicitEpisodeTitle || (mainTitle && mainTitle !== showTitle && !showLevelType ? mainTitle : null)
       : null;
-    const normalizedShowTitle = hasEpisodeSignals ? showTitle || (mainTitle && !episodeTitle ? mainTitle : null) : null;
+    const normalizedShowTitle = hasEpisodeSignals
+      ? showTitle || (episodeTitle ? null : mainTitle) || null
+      : null;
 
     if (!normalizedShowTitle && !movieTitle && !episodeTitle) {
       return null;
@@ -236,16 +275,35 @@
     const episodeNumber = getFirstCollectedValue(valuesByKey, EPISODE_NUMBER_KEYS, true);
     const directVideoId = getFirstCollectedValue(valuesByKey, VIDEO_ID_KEYS, true);
     const videoId = directVideoId !== null ? directVideoId : expectedVideoId;
+    const hasSeriesTypeValue = ENTITY_TYPE_KEYS.some((key) => {
+      const values = valuesByKey[key];
+      return Array.isArray(values) && values.some((v) => typeof v === "string" && EPISODE_ENTITY_VALUES.has(v));
+    });
+    const seriesTypeIsShowLevel = ENTITY_TYPE_KEYS.some((key) => {
+      const values = valuesByKey[key];
+      return Array.isArray(values) && values.some((v) => {
+        if (typeof v !== "string") return false;
+        const lower = v.toLowerCase();
+        return lower === "show" || lower === "series" || lower === "tvseries" || lower === "miniseries";
+      });
+    });
+    const hasSeriesCountValue = SERIES_COUNT_KEYS.some((key) => {
+      const values = valuesByKey[key];
+      return Array.isArray(values) && values.some((v) => typeof v === "number" && v > 0);
+    });
     const hasEpisodeSignals =
       explicitEpisodeTitle !== null ||
       seasonNumber !== null ||
       episodeNumber !== null ||
+      showContainerTitles.length > 0 ||
+      hasSeriesTypeValue ||
+      hasSeriesCountValue ||
       (showTitle !== null && mainTitle !== null && showTitle !== mainTitle);
 
     if (hasEpisodeSignals) {
       const episodeTitle =
-        explicitEpisodeTitle || (mainTitle && mainTitle !== showTitle ? mainTitle : null);
-      const normalizedShowTitle = showTitle || null;
+        explicitEpisodeTitle || (mainTitle && mainTitle !== showTitle && !seriesTypeIsShowLevel && !hasSeriesCountValue ? mainTitle : null);
+      const normalizedShowTitle = showTitle || (episodeTitle ? null : mainTitle) || null;
       if (!normalizedShowTitle && !episodeTitle) {
         return null;
       }

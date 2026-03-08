@@ -318,8 +318,14 @@ async function appendSessionDebugEvent(tabState, sessionKey, event) {
   session.debugEvents.push(normalizedEvent);
   trimArrayInPlace(session.debugEvents, MAX_TAB_DEBUG_EVENTS);
   dirtySessionKeys.add(sessionKey);
-  await persistTabState(tabState);
-  await appendGlobalDebugEvent(normalizedEvent);
+  try {
+    await persistTabState(tabState);
+  } catch (error) {
+    logError(`Failed to persist tab state for tab ${tabState.tabId}`, error);
+  }
+  if (event.requestKind !== "ignored") {
+    await appendGlobalDebugEvent(normalizedEvent);
+  }
 }
 
 function shouldWriteSessionDebug(session) {
@@ -487,7 +493,7 @@ function classifyRequestFromUrl(details) {
   if (matcherApi.isGraphqlMetadataUrl(details.url)) {
     return REQUEST_KIND_GRAPHQL;
   }
-  if (matcherApi.isMemberApiMetadataUrl(details.url) || matcherApi.isLicensedManifestUrl(details.url)) {
+  if (matcherApi.isMemberApiMetadataUrl(details.url)) {
     return REQUEST_KIND_METADATA;
   }
   if (matcherApi.isBifUrl(details.url)) {
@@ -503,7 +509,7 @@ function classifyRequestFromHeaders(details) {
   if (matcherApi.isGraphqlMetadataUrl(details.url)) {
     return REQUEST_KIND_GRAPHQL;
   }
-  if (matcherApi.isMemberApiMetadataUrl(details.url) || matcherApi.isLicensedManifestUrl(details.url)) {
+  if (matcherApi.isMemberApiMetadataUrl(details.url)) {
     return REQUEST_KIND_METADATA;
   }
   if (matcherApi.isBifUrl(details.url)) {
@@ -669,6 +675,30 @@ function closeActiveSession(tabState, reason) {
   return activeSession;
 }
 
+function closeSessionsByWatchId(tabState, watchId, reason) {
+  const closedSessions = [];
+  for (const session of Object.values(tabState.sessions)) {
+    if (session.closed || session.watchId !== watchId) {
+      continue;
+    }
+    session.closed = true;
+    session.closedAt = new Date().toISOString();
+    if (tabState.activeSessionKey === session.sessionKey) {
+      tabState.activeSessionKey = null;
+    }
+    closedSessions.push(session);
+    void appendSessionDebugEvent(tabState, session.sessionKey, {
+      stage: "session_closed",
+      reason,
+      requestKind: null,
+      url: session.watchUrl,
+    }).catch((error) => {
+      logError(`Failed to record session close for tab ${tabState.tabId}`, error);
+    });
+  }
+  return closedSessions;
+}
+
 function createPendingAssetRecord(session, kind, sourceUrl, language, bytes) {
   const assetKey = `${session.sessionKey}:${kind}:${Date.now()}:${Math.random().toString(16).slice(2, 8)}`;
   return {
@@ -794,14 +824,36 @@ async function processMetadataCapture(tabState, session, requestEntry, bodyText,
     });
     return;
   }
-  await applyMetadataToSession(
-    tabState,
-    session,
-    REQUEST_KIND_METADATA,
-    requestEntry.url,
-    parsedMetadata,
-    requestVideoId,
-  );
+  await appendSessionDebugEvent(tabState, session.sessionKey, {
+    stage: "metadata_attempt",
+    requestKind: REQUEST_KIND_METADATA,
+    url: requestEntry.url,
+    kind: parsedMetadata.kind,
+    videoId: parsedMetadata.videoId,
+    showTitle: parsedMetadata.showTitle,
+    movieTitle: parsedMetadata.movieTitle,
+    episodeTitle: parsedMetadata.episodeTitle,
+    requestVideoId: requestVideoId || null,
+  });
+  try {
+    await applyMetadataToSession(
+      tabState,
+      session,
+      REQUEST_KIND_METADATA,
+      requestEntry.url,
+      parsedMetadata,
+      requestVideoId,
+    );
+  } catch (error) {
+    logError(`Metadata application failed for tab ${tabState.tabId}`, error);
+    void appendSessionDebugEvent(tabState, session.sessionKey, {
+      stage: "metadata_apply_error",
+      requestKind: REQUEST_KIND_METADATA,
+      url: requestEntry.url,
+      error: String(error && error.message ? error.message : error),
+    }).catch(() => {});
+    throw error;
+  }
 }
 
 async function processBifCapture(tabState, session, requestEntry, bytes) {
@@ -867,20 +919,31 @@ async function finalizeRequest(requestEntry) {
   }
   session.openRequestCount = Math.max(0, session.openRequestCount - 1);
   const bytes = concatenateChunks(requestEntry.chunks, requestEntry.totalBytes);
-  if (requestEntry.kind === REQUEST_KIND_GRAPHQL) {
-    const bodyText = new TextDecoder("utf-8").decode(bytes);
-    await processGraphqlCapture(tabState, session, bodyText, bytes);
-  } else if (requestEntry.kind === REQUEST_KIND_METADATA) {
-    const bodyText = new TextDecoder("utf-8").decode(bytes);
-    await processMetadataCapture(tabState, session, requestEntry, bodyText, bytes);
-  } else if (requestEntry.kind === REQUEST_KIND_BIF) {
-    await processBifCapture(tabState, session, requestEntry, bytes);
-  } else if (requestEntry.kind === REQUEST_KIND_SUBTITLE) {
-    await processSubtitleCapture(tabState, session, requestEntry, bytes);
-  }
-  await persistTabState(tabState);
-  if (session.closed) {
-    await flushSessionAssets(tabState, session);
+  try {
+    if (requestEntry.kind === REQUEST_KIND_GRAPHQL) {
+      const bodyText = new TextDecoder("utf-8").decode(bytes);
+      await processGraphqlCapture(tabState, session, bodyText, bytes);
+    } else if (requestEntry.kind === REQUEST_KIND_METADATA) {
+      const bodyText = new TextDecoder("utf-8").decode(bytes);
+      await processMetadataCapture(tabState, session, requestEntry, bodyText, bytes);
+    } else if (requestEntry.kind === REQUEST_KIND_BIF) {
+      await processBifCapture(tabState, session, requestEntry, bytes);
+    } else if (requestEntry.kind === REQUEST_KIND_SUBTITLE) {
+      await processSubtitleCapture(tabState, session, requestEntry, bytes);
+    }
+    await persistTabState(tabState);
+    if (session.closed) {
+      await flushSessionAssets(tabState, session);
+    }
+  } catch (error) {
+    logError(`Failed to finalize ${requestEntry.kind} capture for ${requestEntry.url}`, error);
+    void appendSessionDebugEvent(tabState, session.sessionKey, {
+      stage: "finalize_error",
+      requestKind: requestEntry.kind,
+      url: requestEntry.url,
+      error: String(error && error.message ? error.message : error),
+    }).catch(() => {});
+    throw error;
   }
 }
 
@@ -1157,14 +1220,16 @@ async function handleTabUpdated(tabId, changeInfo, tab) {
   }
   if (previousWatchId !== nextWatchId) {
     const transitionReason = previousWatchId && nextWatchId ? "watch_changed" : "left_watch_page";
-    const closedSession = closeActiveSession(tabState, transitionReason);
-    if (closedSession) {
-      const seriesTitleHint = deriveSeriesTitleFromMetadata(closedSession.metadata);
-      if (transitionReason === "watch_changed" && seriesTitleHint) {
-        tabState.seriesTitleHint = seriesTitleHint;
-        tabState.seriesHintWatchId = closedSession.watchId;
-        tabState.seriesHintPending = true;
-      }
+    const closedSessions = previousWatchId
+      ? closeSessionsByWatchId(tabState, previousWatchId, transitionReason)
+      : [];
+    const hintSession = closedSessions.find((session) => deriveSeriesTitleFromMetadata(session.metadata));
+    if (hintSession && transitionReason === "watch_changed") {
+      tabState.seriesTitleHint = deriveSeriesTitleFromMetadata(hintSession.metadata);
+      tabState.seriesHintWatchId = hintSession.watchId;
+      tabState.seriesHintPending = true;
+    }
+    for (const closedSession of closedSessions) {
       await flushSessionAssets(tabState, closedSession);
     }
     if (transitionReason === "left_watch_page") {
@@ -1246,7 +1311,11 @@ async function ensureListenersRegistered() {
 
 async function restoreBadgeState() {
   for (const [tabId, tabState] of captureTabStates.entries()) {
-    await setBadgeEnabled(tabId, Boolean(tabState.captureEnabled));
+    try {
+      await setBadgeEnabled(tabId, Boolean(tabState.captureEnabled));
+    } catch (_error) {
+      logInfo(`Skipping badge restore for stale tab ${tabId}`);
+    }
   }
 }
 
@@ -1255,6 +1324,12 @@ async function bootstrap() {
   const existingTabs = await browserApi.tabs.query({
     url: ["https://www.netflix.com/*"],
   });
+  const realTabIds = new Set(existingTabs.map((tab) => tab.id));
+  for (const tabId of Array.from(captureTabStates.keys())) {
+    if (!realTabIds.has(tabId)) {
+      await removeTabState(tabId);
+    }
+  }
   for (const tab of existingTabs) {
     updateKnownNetflixTab(tab.id, tab.url || "", tab.title || "");
     const existingState = captureTabStates.get(tab.id);
